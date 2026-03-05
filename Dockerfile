@@ -5,21 +5,6 @@ FROM python:3.11-slim
 # - Playwright Chromium 런타임 의존성
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    libnss3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libdbus-1-3 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    libpango-1.0-0 \
-    libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -39,7 +24,9 @@ RUN uv sync --frozen --no-dev --no-install-package torch
 
 # Playwright 내장 Chromium 설치
 # 시스템 Chrome 경로 하드코딩 없이 Playwright가 관리하는 Chromium 사용
-RUN uv run playwright install chromium
+# --with-deps: Chromium 실행에 필요한 시스템 라이브러리를 Playwright가 직접 설치
+# (libasound2, libnss3 등을 수동 관리할 필요 없음)
+RUN uv run playwright install --with-deps chromium
 
 # 소스 코드 복사
 COPY src/ ./src/

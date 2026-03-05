@@ -62,6 +62,35 @@ docker compose run --rm study-helper
 
 ---
 
+## How to Use
+
+### 빌드
+
+최초 실행 전 또는 코드 변경 후 한 번만 실행합니다.
+
+```bash
+docker compose build
+```
+
+> 최초 빌드 시 Chromium 설치로 인해 수 분이 소요될 수 있습니다.
+
+### 실행
+
+```bash
+docker compose run --rm study-helper
+```
+
+실행하면 TUI 화면이 자동으로 표시됩니다. 종료 후 재실행 시에도 동일한 명령어를 사용합니다.
+
+### 종료
+
+| 방법 | 동작 |
+|------|------|
+| 메뉴에서 `0` 입력 | 정상 종료 |
+| `Ctrl + C` | 강제 종료 |
+
+---
+
 ## 사용 방법
 
 실행 후 CUI 메뉴가 표시됩니다.
