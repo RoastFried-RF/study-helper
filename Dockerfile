@@ -38,6 +38,7 @@ RUN mkdir -p /data/downloads \
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 
-ENTRYPOINT ["uv", "run", "python", "src/main.py"]
+ENTRYPOINT ["uv", "run", "--no-sync", "python", "src/main.py"]

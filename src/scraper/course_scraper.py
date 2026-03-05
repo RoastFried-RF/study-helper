@@ -216,12 +216,23 @@ class CourseScraper:
 
         week_label = ""
         lesson_label = ""
+        start_date = None
+        end_date = None
+
         week_span = await el.query_selector("[class*='lesson_periods-week']")
         if week_span:
             week_label = (await week_span.text_content() or "").strip()
         lesson_span = await el.query_selector("[class*='lesson_periods-lesson']")
         if lesson_span:
             lesson_label = (await lesson_span.text_content() or "").strip()
+
+        # 시작/마감 날짜 추출 (예: "3월 10일 오전 00:00")
+        unlock_el = await el.query_selector("[class*='lecture_periods-unlock_at'] span")
+        if unlock_el:
+            start_date = (await unlock_el.text_content() or "").strip() or None
+        due_el = await el.query_selector("[class*='lecture_periods-due_at'] span")
+        if due_el:
+            end_date = (await due_el.text_content() or "").strip() or None
 
         attendance = "none"
         att_el = await el.query_selector("[class*='attendance_status']")
@@ -256,6 +267,8 @@ class CourseScraper:
             attendance=attendance,
             completion=completion,
             is_upcoming=is_upcoming,
+            start_date=start_date,
+            end_date=end_date,
         )
 
     async def __aenter__(self):

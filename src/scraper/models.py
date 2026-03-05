@@ -58,6 +58,8 @@ class LectureItem:
     completion: str = "incomplete"
     content_type_label: str = ""
     is_upcoming: bool = False
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
 
     @property
     def is_video(self) -> bool:

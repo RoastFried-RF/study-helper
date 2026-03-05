@@ -115,20 +115,29 @@ def show_week_list(course: Course, detail: CourseDetail) -> None:
             padding=(0, 2),
             expand=False,
         )
-        table.add_column("완료", width=3, justify="center")
+        table.add_column("완료", width=4, justify="center")
         table.add_column("강의명", min_width=30)
+        table.add_column("기간", style="dim")
         table.add_column("길이", width=8, justify="right", style="dim")
 
         for lec in week.video_lectures:
-            if lec.completion == "completed":
+            if lec.is_upcoming:
+                done_mark = Text("예정", style="dim")
+            elif lec.completion == "completed":
                 done_mark = Text("✓", style="green")
-            elif lec.is_upcoming:
-                done_mark = Text("…", style="dim")
             else:
                 done_mark = Text("○", style="yellow")
 
+            # 날짜 표시: "시작 ~ 마감" 형식
+            if lec.start_date and lec.end_date:
+                date_str = f"{lec.start_date} ~ {lec.end_date}"
+            elif lec.start_date:
+                date_str = f"{lec.start_date} ~"
+            else:
+                date_str = ""
+
             duration = lec.duration or "-"
-            table.add_row(done_mark, lec.title, duration)
+            table.add_row(done_mark, lec.title, date_str, duration)
 
         console.print(table)
 
