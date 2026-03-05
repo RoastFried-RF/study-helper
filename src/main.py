@@ -16,7 +16,7 @@ from src.ui.login import (
     show_login_error,
     show_login_success,
 )
-from src.ui.courses import show_course_list, show_loading, show_week_list
+from src.ui.courses import LectureAction, show_course_list, show_loading, show_week_list
 
 console = Console()
 
@@ -88,7 +88,16 @@ async def run():
             console.print("\n  [red]강의 정보를 불러오지 못했습니다.[/red]\n")
             continue
 
-        show_week_list(selected, detail)
+        result = show_week_list(selected, detail)
+        if result is None:
+            continue
+
+        lec, action = result
+        if action == LectureAction.PLAY:
+            console.print(f"\n  [yellow]재생 기능은 아직 구현되지 않았습니다: {lec.title}[/yellow]\n")
+        elif action == LectureAction.DOWNLOAD:
+            console.print(f"\n  [yellow]다운로드 기능은 아직 구현되지 않았습니다: {lec.title}[/yellow]\n")
+        input("  Enter를 눌러 계속...")
 
     await scraper.close()
 
