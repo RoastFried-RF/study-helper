@@ -1,0 +1,28 @@
+services:
+  study-helper:
+    build: .
+    image: study-helper:latest
+
+    # CUI 인터랙션을 위한 터미널 연결
+    stdin_open: true
+    tty: true
+
+    env_file:
+      - .env
+
+    volumes:
+      # 다운로드 파일 (영상, 음성, 텍스트, 요약) — 호스트에서 직접 접근 가능
+      - ./data:/data
+
+      # Whisper 모델 캐시 — 재빌드 시 재다운로드 방지 (~150MB/base, ~1.5GB/large)
+      - whisper-cache:/root/.cache/whisper
+
+      # Playwright Chromium 캐시 — 재빌드 시 재다운로드 방지
+      - playwright-cache:/root/.cache/ms-playwright
+
+    # 컨테이너 종료 후 자동 제거 (데이터는 볼륨에 보존)
+    restart: "no"
+
+volumes:
+  whisper-cache:
+  playwright-cache:

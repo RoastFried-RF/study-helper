@@ -1,0 +1,36 @@
+# Claude
+CLAUDE.md
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Downloads & generated data
+data/*
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.uv/
+uv.lock
+
+# Node
+node_modules/
+*.lock
+!package-lock.json
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
