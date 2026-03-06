@@ -13,6 +13,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from src.config import Config, _default_download_dir
+from src.summarizer.summarizer import GEMINI_MODEL_IDS, GEMINI_MODEL_LABELS, GEMINI_DEFAULT_MODEL
 
 console = Console()
 
@@ -92,40 +93,52 @@ def run_settings() -> None:
 
     # ── 3. AI 요약 ───────────────────────────────────────────────
     _print_section("3. AI 요약")
-    console.print("  [dim]다운로드한 강의를 AI로 자동 요약합니다.[/dim]")
+    console.print("  [dim]STT로 변환된 텍스트를 AI로 자동 요약합니다.[/dim]")
+    console.print("  [dim]현재 Gemini API를 지원합니다 (무료 티어 사용 가능).[/dim]")
+    console.print()
     _ai_default = "y" if Config.AI_ENABLED == "true" else "n"
     ai_choice = Prompt.ask("  AI 요약 사용", choices=["y", "n"], default=_ai_default, show_choices=True)
     ai_enabled = ai_choice == "y"
     console.print()
 
-    ai_agent = Config.AI_AGENT or "gemini"
+    ai_agent = "gemini"
     api_key = ""
+    gemini_model = Config.GEMINI_MODEL or GEMINI_DEFAULT_MODEL
 
     if ai_enabled:
-        # 3.1. AI 에이전트 종류
-        _print_section("3.1. AI 에이전트")
-        console.print("  [bold]1.[/bold] Gemini  [dim](Google)[/dim]")
-        console.print("  [bold]2.[/bold] ChatGPT  [dim](OpenAI)[/dim]")
-        console.print()
-        _agent_default = "1" if Config.AI_AGENT != "openai" else "2"
-        agent_choice = Prompt.ask("  선택", choices=["1", "2"], default=_agent_default, show_choices=False)
-        ai_agent = "gemini" if agent_choice == "1" else "openai"
-        console.print()
-
-        # 3.2. API 키
-        _print_section("3.2. API 키 입력")
-        _existing_key = Config.GOOGLE_API_KEY if ai_agent == "gemini" else Config.OPENAI_API_KEY
+        # 3.1. Gemini API 키
+        _print_section("3.1. Gemini API 키 입력")
+        console.print("  [dim]Google AI Studio에서 무료로 발급 가능합니다.[/dim]")
+        _existing_key = Config.GOOGLE_API_KEY
         if _existing_key:
             console.print(f"  [dim]현재 키: {_existing_key[:8]}{'*' * 20}[/dim]")
             console.print("  [dim]변경하지 않으려면 Enter를 누르세요.[/dim]")
-        else:
-            _label = "Gemini" if ai_agent == "gemini" else "OpenAI"
-            console.print(f"  [dim]{_label} API 키를 입력하세요.[/dim]")
         console.print()
 
         raw_key = Prompt.ask("  API 키", default="", password=True).strip()
         api_key = raw_key if raw_key else _existing_key
         console.print()
+
+        # API 키가 있을 때만 모델 선택
+        if api_key:
+            # 3.2. Gemini 모델 선택
+            _print_section("3.2. Gemini 모델 선택")
+            console.print("  [dim]무료 티어 모델 사용 권장 (기본값: gemini-2.5-flash)[/dim]")
+            console.print()
+            for i, label in enumerate(GEMINI_MODEL_LABELS, 1):
+                console.print(f"  [bold]{i}.[/bold] {label}")
+            console.print()
+
+            _current_model = Config.GEMINI_MODEL or GEMINI_DEFAULT_MODEL
+            _model_default = str(GEMINI_MODEL_IDS.index(_current_model) + 1) if _current_model in GEMINI_MODEL_IDS else "1"
+            model_choice = Prompt.ask(
+                "  모델 선택",
+                choices=[str(i) for i in range(1, len(GEMINI_MODEL_IDS) + 1)],
+                default=_model_default,
+                show_choices=False,
+            )
+            gemini_model = GEMINI_MODEL_IDS[int(model_choice) - 1]
+            console.print()
 
     # ── 저장 ────────────────────────────────────────────────────
     Config.save_settings(
@@ -135,11 +148,12 @@ def run_settings() -> None:
         ai_enabled=ai_enabled,
         ai_agent=ai_agent,
         api_key=api_key,
+        gemini_model=gemini_model,
     )
 
     console.print("  [bold green]설정이 저장되었습니다.[/bold green]")
     console.print()
-    _print_summary(download_dir, download_rule, stt_enabled, ai_enabled, ai_agent)
+    _print_summary(download_dir, download_rule, stt_enabled, ai_enabled, gemini_model if ai_enabled and api_key else "")
     console.print()
     Prompt.ask("  [dim]Enter를 눌러 계속[/dim]", default="")
 
@@ -150,7 +164,7 @@ def _print_section(title: str) -> None:
 
 
 def _print_summary(download_dir: str, download_rule: str,
-                   stt_enabled: bool, ai_enabled: bool, ai_agent: str) -> None:
+                   stt_enabled: bool, ai_enabled: bool, gemini_model: str) -> None:
     """설정 요약을 표시한다."""
     rule_label = {"video": "영상만 (mp4)", "audio": "음성만 (mp3)", "both": "영상 + 음성"}.get(download_rule, download_rule)
     console.print("  [dim]─────────────────────────────[/dim]")
@@ -159,7 +173,6 @@ def _print_summary(download_dir: str, download_rule: str,
     if download_rule != "video":
         console.print(f"  STT 변환      : [cyan]{'사용' if stt_enabled else '미사용'}[/cyan]")
     console.print(f"  AI 요약       : [cyan]{'사용' if ai_enabled else '미사용'}[/cyan]")
-    if ai_enabled:
-        agent_label = "Gemini" if ai_agent == "gemini" else "ChatGPT"
-        console.print(f"  AI 에이전트   : [cyan]{agent_label}[/cyan]")
+    if ai_enabled and gemini_model:
+        console.print(f"  Gemini 모델   : [cyan]{gemini_model}[/cyan]")
     console.print("  [dim]─────────────────────────────[/dim]")

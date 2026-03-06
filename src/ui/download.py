@@ -111,6 +111,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print(f"  [dim]{mp4_path}[/dim]")
 
     # 5. STT 변환 (mp3가 있고 STT_ENABLED=true인 경우)
+    txt_path = None
     if mp3_path and Config.STT_ENABLED == "true":
         console.print()
         console.print("  [dim]STT 변환 중... (시간이 걸릴 수 있습니다)[/dim]")
@@ -121,5 +122,27 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
             console.print(f"  [dim]{txt_path}[/dim]")
         except Exception as e:
             console.print(f"  [bold red]STT 실패:[/bold red] {e}")
+
+    # 6. AI 요약 (txt가 있고 AI_ENABLED=true인 경우)
+    if txt_path and Config.AI_ENABLED == "true":
+        api_key = Config.GOOGLE_API_KEY if Config.AI_AGENT == "gemini" else Config.OPENAI_API_KEY
+        model = Config.GEMINI_MODEL if Config.AI_AGENT == "gemini" else ""
+        if not api_key:
+            console.print("  [yellow]AI 요약 건너뜀: API 키가 설정되지 않았습니다.[/yellow]")
+        else:
+            from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, summarize
+            console.print()
+            console.print("  [dim]AI 요약 중...[/dim]")
+            try:
+                summary_path = summarize(
+                    txt_path,
+                    agent=Config.AI_AGENT or "gemini",
+                    api_key=api_key,
+                    model=model or GEMINI_DEFAULT_MODEL,
+                )
+                console.print(f"  [bold green]AI 요약 완료![/bold green]")
+                console.print(f"  [dim]{summary_path}[/dim]")
+            except Exception as e:
+                console.print(f"  [bold red]AI 요약 실패:[/bold red] {e}")
 
     return True

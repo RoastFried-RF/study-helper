@@ -71,6 +71,8 @@ class Config:
     AI_ENABLED: str = os.getenv("AI_ENABLED", "")
     # AI 에이전트 종류: gemini / openai
     AI_AGENT: str = os.getenv("AI_AGENT", "")
+    # Gemini 모델 ID
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "")
 
     @classmethod
     def has_credentials(cls) -> bool:
@@ -89,13 +91,16 @@ class Config:
     @classmethod
     def save_settings(cls, download_dir: str, download_rule: str,
                       stt_enabled: bool, ai_enabled: bool,
-                      ai_agent: str, api_key: str) -> None:
+                      ai_agent: str, api_key: str,
+                      gemini_model: str = "") -> None:
         """설정 항목을 .env 파일에 저장한다."""
         cls.DOWNLOAD_DIR = download_dir
         cls.DOWNLOAD_RULE = download_rule
         cls.STT_ENABLED = "true" if stt_enabled else "false"
         cls.AI_ENABLED = "true" if ai_enabled else "false"
         cls.AI_AGENT = ai_agent
+        if gemini_model:
+            cls.GEMINI_MODEL = gemini_model
         # API 키는 선택한 에이전트에 맞게 저장
         if ai_enabled and ai_agent == "gemini":
             cls.GOOGLE_API_KEY = api_key
@@ -109,6 +114,8 @@ class Config:
             "AI_ENABLED": cls.AI_ENABLED,
             "AI_AGENT": ai_agent,
         }
+        if gemini_model:
+            to_save["GEMINI_MODEL"] = gemini_model
         if ai_enabled and ai_agent == "gemini":
             to_save["GOOGLE_API_KEY"] = api_key
         elif ai_enabled and ai_agent == "openai":
