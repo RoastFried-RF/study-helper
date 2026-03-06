@@ -20,6 +20,7 @@ dependencies = [
     "openai>=1.0.0",
     # 환경변수
     "python-dotenv>=1.0.0",
+    "cryptography>=46.0.5",
 ]
 
 # torch는 Dockerfile에서 CPU wheel로 직접 설치하므로 여기서 제외

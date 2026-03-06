@@ -18,6 +18,7 @@ from src.ui.login import (
 )
 from src.ui.courses import LectureAction, show_course_list, show_loading, show_week_list
 from src.ui.player import run_player
+from src.ui.download import ask_download_dir
 
 console = Console()
 
@@ -98,7 +99,9 @@ async def run():
             await run_player(scraper._page, lec, debug=True)
             input("\n  Enter를 눌러 계속...")
         elif action == LectureAction.DOWNLOAD:
-            console.print(f"\n  [yellow]다운로드 기능은 아직 구현되지 않았습니다: {lec.title}[/yellow]\n")
+            download_dir = ask_download_dir()
+            console.print(f"\n  [yellow]다운로드 기능은 아직 구현되지 않았습니다.[/yellow]")
+            console.print(f"  [dim]저장 경로: {download_dir}[/dim]\n")
             input("  Enter를 눌러 계속...")
 
     await scraper.close()
