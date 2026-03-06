@@ -12,22 +12,29 @@ _SUMMARY_PROMPT = """\
 아래는 강의를 음성 인식(STT)으로 변환한 텍스트입니다. STT 특성상 오탈자나 문장이 부자연스러운 부분이 있을 수 있으니 문맥을 고려해 이해해 주세요.
 
 다음 형식에 맞춰 한국어로 요약해 주세요.
+결과물은 일반 텍스트 파일로 저장되므로 #, *, **, -, ``` 같은 마크다운 기호는 절대 사용하지 마세요.
+섹션 제목은 대괄호로 표시하고, 항목은 숫자나 줄바꿈으로 구분하세요.
 
----
+형식 예시:
 
-## 📌 강의 핵심 주제
-(이번 강의에서 다루는 핵심 주제를 1~2문장으로 서술)
+[강의 핵심 주제]
+이번 강의에서 다루는 핵심 주제를 1~2문장으로 서술.
 
-## 🗂️ 주요 내용 정리
-(강의 흐름에 따라 핵심 내용을 항목별로 정리. 소주제가 있으면 소제목으로 구분)
+[주요 내용 정리]
+1. 첫 번째 핵심 내용
+2. 두 번째 핵심 내용
+   - 소주제가 있으면 들여쓰기로 구분
+3. ...
 
-## 📖 핵심 용어 / 개념 정의
-(강의에서 중요하게 다룬 용어나 개념을 정의와 함께 정리. 없으면 생략)
+[핵심 용어 / 개념 정의]
+용어1: 정의 및 설명
+용어2: 정의 및 설명
+(해당 없으면 이 섹션 생략)
 
-## ✅ 학습 포인트 요약
-(시험이나 과제에서 중요할 것 같은 내용을 3~5개 항목으로 요약)
-
----
+[학습 포인트 요약]
+1. 시험이나 과제에서 중요할 것 같은 내용
+2. ...
+3. ...
 
 강의 텍스트:
 {text}
@@ -79,16 +86,22 @@ def summarize(txt_path: Path, agent: str, api_key: str, model: str) -> Path:
 
 def _summarize_gemini(api_key: str, model: str, prompt: str) -> str:
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
     except ImportError:
         raise RuntimeError(
-            "google-generativeai 패키지가 설치되어 있지 않습니다.\n"
-            "설치: pip install google-generativeai"
+            "google-genai 패키지가 설치되어 있지 않습니다.\n"
+            "설치: pip install google-genai"
         )
 
-    genai.configure(api_key=api_key)
-    client = genai.GenerativeModel(model)
-    response = client.generate_content(prompt)
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
+    )
     return response.text
 
 

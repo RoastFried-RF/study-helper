@@ -10,7 +10,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.progress import BarColumn, DownloadColumn, Progress, SpinnerColumn, TextColumn, TransferSpeedColumn
+from rich.progress import BarColumn, DownloadColumn, Progress, SpinnerColumn, TaskID, TextColumn, TimeElapsedColumn, TransferSpeedColumn
+from rich.spinner import Spinner
 from rich.text import Text
 
 from src.config import Config
@@ -130,16 +131,36 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         if not api_key:
             console.print("  [yellow]AI 요약 건너뜀: API 키가 설정되지 않았습니다.[/yellow]")
         else:
+            import warnings
+            import asyncio
+            from concurrent.futures import ThreadPoolExecutor
             from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, summarize
+
             console.print()
-            console.print("  [dim]AI 요약 중...[/dim]")
+            spinner_progress = Progress(
+                SpinnerColumn(),
+                TextColumn("  [bold]{task.description}"),
+                TimeElapsedColumn(),
+                console=console,
+                expand=False,
+            )
+            task_id = spinner_progress.add_task("AI 요약 중...", total=None)
+
             try:
-                summary_path = summarize(
-                    txt_path,
-                    agent=Config.AI_AGENT or "gemini",
-                    api_key=api_key,
-                    model=model or GEMINI_DEFAULT_MODEL,
-                )
+                with Live(spinner_progress, console=console, refresh_per_second=8):
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        loop = asyncio.get_event_loop()
+                        with ThreadPoolExecutor() as pool:
+                            summary_path = await loop.run_in_executor(
+                                pool,
+                                lambda: summarize(
+                                    txt_path,
+                                    agent=Config.AI_AGENT or "gemini",
+                                    api_key=api_key,
+                                    model=model or GEMINI_DEFAULT_MODEL,
+                                ),
+                            )
                 console.print(f"  [bold green]AI 요약 완료![/bold green]")
                 console.print(f"  [dim]{summary_path}[/dim]")
             except Exception as e:

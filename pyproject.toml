@@ -16,7 +16,7 @@ dependencies = [
     # torch는 Dockerfile에서 CPU 전용으로 별도 설치
     "openai-whisper>=20240930",
     # AI 요약
-    "google-generativeai>=0.8.0",
+    "google-genai>=1.0.0",
     "openai>=1.0.0",
     # 환경변수
     "python-dotenv>=1.0.0",

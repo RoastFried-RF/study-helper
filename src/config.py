@@ -59,8 +59,8 @@ def _default_download_dir() -> str:
 class Config:
     LMS_USER_ID: str = _load_credential("LMS_USER_ID")
     LMS_PASSWORD: str = _load_credential("LMS_PASSWORD")
-    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    GOOGLE_API_KEY: str = _load_credential("GOOGLE_API_KEY")
+    OPENAI_API_KEY: str = _load_credential("OPENAI_API_KEY")
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
     DOWNLOAD_DIR: str = os.getenv("DOWNLOAD_DIR", "")
     # 다운로드 규칙: video / audio / both
@@ -117,9 +117,9 @@ class Config:
         if gemini_model:
             to_save["GEMINI_MODEL"] = gemini_model
         if ai_enabled and ai_agent == "gemini":
-            to_save["GOOGLE_API_KEY"] = api_key
+            to_save["GOOGLE_API_KEY"] = encrypt(api_key) if api_key else ""
         elif ai_enabled and ai_agent == "openai":
-            to_save["OPENAI_API_KEY"] = api_key
+            to_save["OPENAI_API_KEY"] = encrypt(api_key) if api_key else ""
         cls._save_env(to_save)
 
     @classmethod
