@@ -18,7 +18,8 @@ from src.ui.login import (
 )
 from src.ui.courses import LectureAction, show_course_list, show_loading, show_week_list
 from src.ui.player import run_player
-from src.ui.download import ask_download_dir, run_download
+from src.ui.download import run_download
+from src.ui.settings import run_settings
 
 console = Console()
 
@@ -69,7 +70,11 @@ async def run():
             show_login_success()
             Config.save_credentials(user_id, password)
 
-    # ── 2. 과목 목록 로드 ────────────────────────────────────────
+    # ── 2. 최초 설정 (설정이 없으면 진행) ────────────────────────
+    if not Config.has_settings():
+        run_settings()
+
+    # ── 3. 과목 목록 로드 ────────────────────────────────────────
     try:
         courses, details = await _load_courses(scraper)
     except Exception as e:
@@ -77,7 +82,7 @@ async def run():
         await scraper.close()
         sys.exit(1)
 
-    # ── 3. 과목 선택 루프 ────────────────────────────────────────
+    # ── 4. 과목 선택 루프 ────────────────────────────────────────
     while True:
         selected = show_course_list(courses, details)
         if selected is None:
@@ -98,8 +103,11 @@ async def run():
         if action == LectureAction.PLAY:
             await run_player(scraper._page, lec, debug=True)
             input("\n  Enter를 눌러 계속...")
-        elif action == LectureAction.DOWNLOAD:
-            await run_download(scraper._page, lec, selected)
+        elif action == LectureAction.DOWNLOAD_VIDEO:
+            await run_download(scraper._page, lec, selected, audio_only=False)
+            input("\n  Enter를 눌러 계속...")
+        elif action == LectureAction.DOWNLOAD_AUDIO:
+            await run_download(scraper._page, lec, selected, audio_only=True)
             input("\n  Enter를 눌러 계속...")
 
     await scraper.close()

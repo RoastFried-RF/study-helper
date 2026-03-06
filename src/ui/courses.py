@@ -15,7 +15,8 @@ console = Console()
 
 class LectureAction(Enum):
     PLAY = "play"
-    DOWNLOAD = "download"
+    DOWNLOAD_VIDEO = "download_video"
+    DOWNLOAD_AUDIO = "download_audio"
     CANCEL = "cancel"
 
 
@@ -23,12 +24,8 @@ def show_loading(message: str):
     console.print(f"  [yellow]{message}[/yellow]")
 
 
-def show_course_list(courses: List[Course], details: List[Optional[CourseDetail]]) -> Optional[Course]:
-    """
-    과목 목록을 테이블로 표시하고 선택된 Course를 반환한다.
-    0 입력 시 None 반환 (종료).
-    details는 courses와 같은 순서의 CourseDetail 리스트 (로딩 실패 시 None).
-    """
+def _redraw_course_list(courses: List[Course], details: List[Optional[CourseDetail]]) -> None:
+    """과목 목록 테이블을 (재)출력한다."""
     console.clear()
     console.print(Panel(
         Text("수강 중인 과목 목록", justify="center", style="bold cyan"),
@@ -70,10 +67,24 @@ def show_course_list(courses: List[Course], details: List[Optional[CourseDetail]
     console.print(table)
     console.print()
 
+
+def show_course_list(courses: List[Course], details: List[Optional[CourseDetail]]) -> Optional[Course]:
+    """
+    과목 목록을 테이블로 표시하고 선택된 Course를 반환한다.
+    0 입력 시 None 반환 (종료). 'setting' 입력 시 설정 화면으로 이동.
+    details는 courses와 같은 순서의 CourseDetail 리스트 (로딩 실패 시 None).
+    """
+    _redraw_course_list(courses, details)
+
     while True:
-        choice = Prompt.ask("  과목 선택 [dim](0: 종료)[/dim]")
+        choice = Prompt.ask("  과목 선택 [dim](0: 종료 / setting: 설정)[/dim]")
         if choice == "0":
             return None
+        if choice.lower() == "setting":
+            from src.ui.settings import run_settings
+            run_settings()
+            _redraw_course_list(courses, details)
+            continue
         if choice.isdigit() and 1 <= int(choice) <= len(courses):
             return courses[int(choice) - 1]
         console.print("  [red]올바른 번호를 입력하세요.[/red]")
@@ -192,14 +203,17 @@ def _show_lecture_action_menu(lec: LectureItem) -> LectureAction:
     ))
     console.print()
     console.print("  [bold]1.[/bold] 재생  [dim](백그라운드 출석 처리)[/dim]")
-    console.print("  [bold]2.[/bold] 다운로드")
-    console.print("  [bold]3.[/bold] 취소")
+    console.print("  [bold]2.[/bold] 영상 다운로드  [dim](mp4)[/dim]")
+    console.print("  [bold]3.[/bold] 음성 다운로드  [dim](mp3)[/dim]")
+    console.print("  [bold]4.[/bold] 취소")
     console.print()
 
     while True:
-        choice = Prompt.ask("  선택", choices=["1", "2", "3"], show_choices=False)
+        choice = Prompt.ask("  선택", choices=["1", "2", "3", "4"], show_choices=False)
         if choice == "1":
             return LectureAction.PLAY
         if choice == "2":
-            return LectureAction.DOWNLOAD
+            return LectureAction.DOWNLOAD_VIDEO
+        if choice == "3":
+            return LectureAction.DOWNLOAD_AUDIO
         return LectureAction.CANCEL

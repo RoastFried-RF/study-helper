@@ -63,14 +63,23 @@ class Config:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
     DOWNLOAD_DIR: str = os.getenv("DOWNLOAD_DIR", "")
+    # 다운로드 규칙: video / audio / both
+    DOWNLOAD_RULE: str = os.getenv("DOWNLOAD_RULE", "")
+    # STT 사용 여부: true / false
+    STT_ENABLED: str = os.getenv("STT_ENABLED", "")
+    # AI 요약 사용 여부: true / false
+    AI_ENABLED: str = os.getenv("AI_ENABLED", "")
+    # AI 에이전트 종류: gemini / openai
+    AI_AGENT: str = os.getenv("AI_AGENT", "")
 
     @classmethod
     def has_credentials(cls) -> bool:
         return bool(cls.LMS_USER_ID and cls.LMS_PASSWORD)
 
     @classmethod
-    def has_download_dir(cls) -> bool:
-        return bool(cls.DOWNLOAD_DIR)
+    def has_settings(cls) -> bool:
+        """최초 설정이 완료됐는지 확인 (다운로드 규칙 기준)."""
+        return bool(cls.DOWNLOAD_RULE)
 
     @classmethod
     def get_download_dir(cls) -> str:
@@ -78,10 +87,33 @@ class Config:
         return cls.DOWNLOAD_DIR or _default_download_dir()
 
     @classmethod
-    def save_download_dir(cls, download_dir: str) -> None:
-        """다운로드 경로를 .env 파일에 저장"""
+    def save_settings(cls, download_dir: str, download_rule: str,
+                      stt_enabled: bool, ai_enabled: bool,
+                      ai_agent: str, api_key: str) -> None:
+        """설정 항목을 .env 파일에 저장한다."""
         cls.DOWNLOAD_DIR = download_dir
-        cls._save_env({"DOWNLOAD_DIR": download_dir})
+        cls.DOWNLOAD_RULE = download_rule
+        cls.STT_ENABLED = "true" if stt_enabled else "false"
+        cls.AI_ENABLED = "true" if ai_enabled else "false"
+        cls.AI_AGENT = ai_agent
+        # API 키는 선택한 에이전트에 맞게 저장
+        if ai_enabled and ai_agent == "gemini":
+            cls.GOOGLE_API_KEY = api_key
+        elif ai_enabled and ai_agent == "openai":
+            cls.OPENAI_API_KEY = api_key
+
+        to_save: dict = {
+            "DOWNLOAD_DIR": download_dir,
+            "DOWNLOAD_RULE": download_rule,
+            "STT_ENABLED": cls.STT_ENABLED,
+            "AI_ENABLED": cls.AI_ENABLED,
+            "AI_AGENT": ai_agent,
+        }
+        if ai_enabled and ai_agent == "gemini":
+            to_save["GOOGLE_API_KEY"] = api_key
+        elif ai_enabled and ai_agent == "openai":
+            to_save["OPENAI_API_KEY"] = api_key
+        cls._save_env(to_save)
 
     @classmethod
     def save_credentials(cls, user_id: str, password: str) -> None:
