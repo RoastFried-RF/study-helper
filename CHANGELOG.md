@@ -1,5 +1,36 @@
 # Changelog
 
+## [v1.0.0] - 2026-03-09
+
+### 추가
+- **자동 모드**: 지정된 스케줄(KST 기준 기본 09:00 / 13:00 / 18:00 / 23:00)마다 미시청 강의를 자동으로 재생 → 다운로드 → STT → AI 요약 → 텔레그램 알림 처리
+  - 자동 모드 진입 시 스케줄 직접 설정 가능
+  - 대기 화면에 다음 실행 시각 및 남은 시간 실시간 표시
+  - STT·AI 요약·텔레그램 미설정 시 필수 조건 안내 후 설정 화면으로 이동
+  - 오류 발생 강의는 건너뛰고 텔레그램으로 오류 알림 발송
+- **텔레그램 알림**: 재생 완료/실패, 다운로드 실패, 다운로드 불가(learningx), AI 요약 완료, 자동 모드 오류 알림 지원
+  - 요약 전송 후 파일 자동 삭제 옵션
+  - 봇 토큰/Chat ID 입력 시 연결 테스트 자동 수행
+- **다운로드 재시도**: URL 추출 실패 시 10초 간격으로 최대 3회 자동 재시도, 최종 실패 시에만 텔레그램 오류 알림 발송
+- **learningx 강의 조기 감지**: 다운로드 불가 형식 강의를 URL로 즉시 감지하여 불필요한 재시도 없이 안내 메시지 표시
+- **오류 로그**: 재생/다운로드 실패 시에만 `logs/YYYYMMDD_HHMMSS_<action>.log` 파일 자동 생성 (정상 동작 시 파일 미생성)
+- **가이드 문서**: Gemini API 키 발급 가이드(`docs/gemini-api-key.md`), 텔레그램 봇 설정 가이드(`docs/telegram-setup.md`) 추가
+
+### 변경
+- 텔레그램 봇 토큰·Chat ID·API 키 입력 시 평문 표시로 변경 (붙여넣기 불가 문제 해결)
+- 텔레그램 알림 메시지 양식 규격화
+
+### 수정
+- learningx 플레이어 강의 지원: `canvas.ssu.ac.kr/learningx/lti/lecture_attendance` 방식 강의를 자동 감지하여 learningx API에서 `viewer_url`을 조회, 기존 Plan B(진도 API 방식)로 출석 처리
+- 재생 완료 후 강의 목록의 시청 상태(`completion`)를 즉시 갱신하여 재로드 없이 완료 표시 반영
+- 강의 페이지 이동 시 `wait_until="networkidle"` → `domcontentloaded`로 변경하여 LMS 스트리밍/폴링으로 인한 30초 타임아웃 오류 수정
+- 진도 API 요청에 `duration` 파라미터 누락으로 400 오류 발생하던 문제 수정
+- ARM64(Apple Silicon) Docker 환경에서 Chromium H.264 미지원 우회: VP8 WebM 더미 영상으로 MP4 요청 인터셉트
+- 백그라운드 재생 Plan B(진도 API 방식)에서 `endat=0.00`으로 인한 영상 길이 오류 수정, `LectureItem.duration`을 fallback으로 사용
+- Playwright 브라우저 실행 인수에 `--password-store=basic` 추가하여 macOS Keychain 접근 경고 제거
+
+---
+
 ## [v1.0.0-beta.3] - 2026-03-09
 
 ### 추가

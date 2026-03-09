@@ -141,13 +141,11 @@ async def run_auto_mode(scraper, courses, details) -> None:
     console.print()
     console.print(f"  스케줄: KST {', '.join(f'{h:02d}:00' for h in schedule_hours)}")
     console.print()
-    console.print("  [dim]0을 입력하면 자동 모드를 종료합니다.[/dim]")
-    console.print()
 
     stop_event = asyncio.Event()
 
     async def _input_listener():
-        """별도 태스크로 사용자 입력을 감시한다."""
+        """별도 태스크로 사용자 입력을 감시한다. '0' + Enter로 종료."""
         loop = asyncio.get_event_loop()
         while not stop_event.is_set():
             try:
@@ -164,24 +162,32 @@ async def run_auto_mode(scraper, courses, details) -> None:
         while not stop_event.is_set():
             next_time = _next_schedule_time(schedule_hours)
 
-            # 대기 루프 — 1초마다 남은 시간 갱신 출력
+            # 안내 줄 출력 (한 번만)
+            sys.stdout.write("  0 + Enter 로 종료\n")
+            sys.stdout.flush()
+
+            # 대기 루프 — \r로 같은 줄 덮어쓰기
             while not stop_event.is_set():
                 now = datetime.now(_KST)
                 if now >= next_time:
                     break
                 remaining = _fmt_remaining(next_time)
-                console.print(
-                    f"\r  [bold green]자동 모드로 동작 중입니다[/bold green]  "
-                    f"[dim]다음 체크: {next_time.strftime('%H:%M')} ({remaining} 후)[/dim]"
-                    "          ",
-                    end="",
+                line = (
+                    f"  \033[1;32m● 자동 모드 동작 중\033[0m"
+                    f"  \033[2m다음 체크  {next_time.strftime('%H:%M')} ({remaining} 후)\033[0m"
+                    "          "
                 )
+                sys.stdout.write(f"\r{line}")
+                sys.stdout.flush()
                 await asyncio.sleep(1)
+
+            # 상태 줄 정리 후 개행
+            sys.stdout.write("\r" + " " * 80 + "\r\n")
+            sys.stdout.flush()
 
             if stop_event.is_set():
                 break
 
-            console.print()
             console.print()
             now_str = datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
             console.print(f"  [bold cyan][{now_str}] 스케줄 체크 시작[/bold cyan]")
