@@ -73,6 +73,12 @@ class Config:
     AI_AGENT: str = os.getenv("AI_AGENT", "")
     # Gemini 모델 ID
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "")
+    # 텔레그램 봇 연동
+    TELEGRAM_ENABLED: str = os.getenv("TELEGRAM_ENABLED", "")
+    TELEGRAM_BOT_TOKEN: str = _load_credential("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    # 텔레그램 전송 후 파일 자동 삭제
+    TELEGRAM_AUTO_DELETE: str = os.getenv("TELEGRAM_AUTO_DELETE", "")
 
     @classmethod
     def has_credentials(cls) -> bool:
@@ -121,6 +127,20 @@ class Config:
         elif ai_enabled and ai_agent == "openai":
             to_save["OPENAI_API_KEY"] = encrypt(api_key) if api_key else ""
         cls._save_env(to_save)
+
+    @classmethod
+    def save_telegram(cls, enabled: bool, bot_token: str, chat_id: str, auto_delete: bool) -> None:
+        """텔레그램 설정을 .env 파일에 저장한다."""
+        cls.TELEGRAM_ENABLED = "true" if enabled else "false"
+        cls.TELEGRAM_BOT_TOKEN = bot_token
+        cls.TELEGRAM_CHAT_ID = chat_id
+        cls.TELEGRAM_AUTO_DELETE = "true" if auto_delete else "false"
+        cls._save_env({
+            "TELEGRAM_ENABLED": cls.TELEGRAM_ENABLED,
+            "TELEGRAM_BOT_TOKEN": encrypt(bot_token) if bot_token else "",
+            "TELEGRAM_CHAT_ID": chat_id,
+            "TELEGRAM_AUTO_DELETE": cls.TELEGRAM_AUTO_DELETE,
+        })
 
     @classmethod
     def save_credentials(cls, user_id: str, password: str) -> None:

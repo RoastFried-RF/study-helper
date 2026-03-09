@@ -104,6 +104,7 @@ async def run():
             success = await run_player(scraper._page, lec, debug=False)
             if success:
                 lec.completion = "completed"
+                _notify_playback(selected.long_name, lec)
             input("\n  Enter를 눌러 계속...")
         elif action == LectureAction.DOWNLOAD:
             rule = Config.DOWNLOAD_RULE or "both"
@@ -152,6 +153,24 @@ async def _load_courses(scraper: CourseScraper):
         details.append(detail)
 
     return courses, details
+
+
+def _notify_playback(course_name: str, lec) -> None:
+    """재생 완료 텔레그램 알림을 전송한다 (설정된 경우에만)."""
+    if Config.TELEGRAM_ENABLED != "true":
+        return
+    token = Config.TELEGRAM_BOT_TOKEN
+    chat_id = Config.TELEGRAM_CHAT_ID
+    if not token or not chat_id:
+        return
+    from src.notifier.telegram_notifier import notify_playback_complete
+    notify_playback_complete(
+        bot_token=token,
+        chat_id=chat_id,
+        course_name=course_name,
+        week_label=lec.week_label,
+        lecture_title=lec.title,
+    )
 
 
 def main():

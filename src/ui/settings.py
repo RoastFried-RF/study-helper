@@ -140,6 +140,63 @@ def run_settings() -> None:
             gemini_model = GEMINI_MODEL_IDS[int(model_choice) - 1]
             console.print()
 
+    # ── 4. 텔레그램 알림 ─────────────────────────────────────────
+    _print_section("4. 텔레그램 알림")
+    console.print("  [dim]재생 완료 및 AI 요약 결과를 텔레그램 봇으로 받을 수 있습니다.[/dim]")
+    console.print()
+    _tg_default = "y" if Config.TELEGRAM_ENABLED == "true" else "n"
+    tg_choice = Prompt.ask("  텔레그램 알림 사용", choices=["y", "n"], default=_tg_default, show_choices=True)
+    tg_enabled = tg_choice == "y"
+    console.print()
+
+    tg_token = Config.TELEGRAM_BOT_TOKEN
+    tg_chat_id = Config.TELEGRAM_CHAT_ID
+    tg_auto_delete = Config.TELEGRAM_AUTO_DELETE == "true"
+
+    if tg_enabled:
+        # 4.1. 봇 토큰
+        _print_section("4.1. 텔레그램 봇 토큰")
+        console.print("  [dim]BotFather(@BotFather)에서 /newbot으로 발급받은 토큰을 입력하세요.[/dim]")
+        if tg_token:
+            console.print(f"  [dim]현재 토큰: {tg_token[:10]}{'*' * 20}[/dim]")
+            console.print("  [dim]변경하지 않으려면 Enter를 누르세요.[/dim]")
+        console.print()
+        raw_token = Prompt.ask("  봇 토큰", default="", password=True).strip()
+        if raw_token:
+            tg_token = raw_token
+        console.print()
+
+        # 4.2. Chat ID
+        _print_section("4.2. Chat ID")
+        console.print("  [dim]@userinfobot에게 /start를 보내면 숫자로 된 Chat ID를 확인할 수 있습니다.[/dim]")
+        if tg_chat_id:
+            console.print(f"  [dim]현재 Chat ID: {tg_chat_id}[/dim]")
+        console.print()
+        raw_chat_id = Prompt.ask("  Chat ID", default=tg_chat_id or "").strip()
+        if raw_chat_id:
+            tg_chat_id = raw_chat_id
+        console.print()
+
+        # 연결 테스트
+        if tg_token and tg_chat_id:
+            console.print("  [dim]연결 테스트 중...[/dim]")
+            from src.notifier.telegram_notifier import verify_bot
+            ok, err = verify_bot(tg_token, tg_chat_id)
+            if ok:
+                console.print("  [bold green]텔레그램 연결 성공! 테스트 메시지를 확인하세요.[/bold green]")
+            else:
+                console.print(f"  [yellow]연결 테스트 실패: {err}[/yellow]")
+                console.print("  [dim]설정은 저장되지만 알림이 전송되지 않을 수 있습니다.[/dim]")
+            console.print()
+
+        # 4.3. 자동 삭제 옵션
+        _print_section("4.3. 요약 전송 후 파일 자동 삭제")
+        console.print("  [dim]AI 요약 전송 성공 후 영상, 음성, STT 텍스트, 요약 파일을 모두 삭제합니다.[/dim]")
+        _del_default = "y" if tg_auto_delete else "n"
+        del_choice = Prompt.ask("  자동 삭제 사용", choices=["y", "n"], default=_del_default, show_choices=True)
+        tg_auto_delete = del_choice == "y"
+        console.print()
+
     # ── 저장 ────────────────────────────────────────────────────
     Config.save_settings(
         download_dir=str(Path(download_dir).resolve()),
@@ -150,10 +207,16 @@ def run_settings() -> None:
         api_key=api_key,
         gemini_model=gemini_model,
     )
+    Config.save_telegram(
+        enabled=tg_enabled,
+        bot_token=tg_token,
+        chat_id=tg_chat_id,
+        auto_delete=tg_auto_delete,
+    )
 
     console.print("  [bold green]설정이 저장되었습니다.[/bold green]")
     console.print()
-    _print_summary(download_dir, download_rule, stt_enabled, ai_enabled, gemini_model if ai_enabled and api_key else "")
+    _print_summary(download_dir, download_rule, stt_enabled, ai_enabled, gemini_model if ai_enabled and api_key else "", tg_enabled)
     console.print()
     Prompt.ask("  [dim]Enter를 눌러 계속[/dim]", default="")
 
@@ -164,7 +227,8 @@ def _print_section(title: str) -> None:
 
 
 def _print_summary(download_dir: str, download_rule: str,
-                   stt_enabled: bool, ai_enabled: bool, gemini_model: str) -> None:
+                   stt_enabled: bool, ai_enabled: bool, gemini_model: str,
+                   tg_enabled: bool = False) -> None:
     """설정 요약을 표시한다."""
     rule_label = {"video": "영상만 (mp4)", "audio": "음성만 (mp3)", "both": "영상 + 음성"}.get(download_rule, download_rule)
     console.print("  [dim]─────────────────────────────[/dim]")
@@ -175,4 +239,5 @@ def _print_summary(download_dir: str, download_rule: str,
     console.print(f"  AI 요약       : [cyan]{'사용' if ai_enabled else '미사용'}[/cyan]")
     if ai_enabled and gemini_model:
         console.print(f"  Gemini 모델   : [cyan]{gemini_model}[/cyan]")
+    console.print(f"  텔레그램 알림  : [cyan]{'사용' if tg_enabled else '미사용'}[/cyan]")
     console.print("  [dim]─────────────────────────────[/dim]")

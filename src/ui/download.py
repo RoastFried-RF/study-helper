@@ -19,7 +19,7 @@ from src.config import Config
 console = Console()
 
 
-async def run_download(page, lec, course, audio_only: bool = False, both: bool = False) -> bool:
+async def run_download(page, lec, course, audio_only: bool = False, both: bool = False) -> bool:  # noqa: C901
     """
     강의 영상을 다운로드하고 진행률을 Progress bar로 표시한다.
 
@@ -125,6 +125,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
             console.print(f"  [bold red]STT 실패:[/bold red] {e}")
 
     # 6. AI 요약 (txt가 있고 AI_ENABLED=true인 경우)
+    summary_path = None
     if txt_path and Config.AI_ENABLED == "true":
         api_key = Config.GOOGLE_API_KEY if Config.AI_AGENT == "gemini" else Config.OPENAI_API_KEY
         model = Config.GEMINI_MODEL if Config.AI_AGENT == "gemini" else ""
@@ -165,5 +166,35 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
                 console.print(f"  [dim]{summary_path}[/dim]")
             except Exception as e:
                 console.print(f"  [bold red]AI 요약 실패:[/bold red] {e}")
+
+    # 7. 텔레그램 알림 (AI 요약 완료 시)
+    if summary_path and Config.TELEGRAM_ENABLED == "true":
+        tg_token = Config.TELEGRAM_BOT_TOKEN
+        tg_chat_id = Config.TELEGRAM_CHAT_ID
+        if tg_token and tg_chat_id:
+            from src.notifier.telegram_notifier import notify_summary_complete
+
+            console.print()
+            console.print("  [dim]텔레그램으로 요약 전송 중...[/dim]")
+
+            # 자동 삭제 대상 파일 목록
+            files_to_delete = None
+            if Config.TELEGRAM_AUTO_DELETE == "true":
+                files_to_delete = [f for f in [mp4_path, mp3_path, txt_path, summary_path] if f]
+
+            ok = notify_summary_complete(
+                bot_token=tg_token,
+                chat_id=tg_chat_id,
+                course_name=course.long_name,
+                lecture_title=lec.title,
+                summary_path=summary_path,
+                auto_delete_files=files_to_delete,
+            )
+            if ok:
+                console.print("  [bold green]텔레그램 전송 완료![/bold green]")
+                if files_to_delete:
+                    console.print("  [dim]파일이 자동 삭제되었습니다.[/dim]")
+            else:
+                console.print("  [yellow]텔레그램 전송 실패. 파일은 유지됩니다.[/yellow]")
 
     return True
