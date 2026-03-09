@@ -16,7 +16,7 @@ from src.ui.login import (
     show_login_error,
     show_login_success,
 )
-from src.ui.courses import LectureAction, show_course_list, show_week_list
+from src.ui.courses import LectureAction, _AUTO_SENTINEL, show_course_list, show_week_list
 from src.ui.player import run_player
 from src.ui.download import run_download
 from src.ui.settings import run_settings
@@ -88,6 +88,11 @@ async def run():
         if selected is None:
             console.print("\n  [dim]종료합니다.[/dim]\n")
             break
+
+        if selected is _AUTO_SENTINEL:
+            from src.ui.auto import run_auto_mode
+            await run_auto_mode(scraper, courses, details)
+            continue
 
         idx = courses.index(selected)
         detail = details[idx]

@@ -115,6 +115,20 @@ def notify_download_unsupported(
     return _send_message(bot_token, chat_id, text)
 
 
+def notify_auto_error(
+    bot_token: str,
+    chat_id: str,
+    course_name: str,
+    week_label: str,
+    lecture_title: str,
+    error_msg: str,
+) -> bool:
+    """자동 모드 처리 오류 알림을 전송한다."""
+    label = _lecture_label(course_name, week_label, lecture_title)
+    text = f"[자동 모드 오류] {label}\n{error_msg}"
+    return _send_message(bot_token, chat_id, text)
+
+
 def notify_summary_complete(
     bot_token: str,
     chat_id: str,

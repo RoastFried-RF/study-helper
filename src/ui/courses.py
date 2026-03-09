@@ -67,16 +67,20 @@ def _redraw_course_list(courses: List[Course], details: List[Optional[CourseDeta
     console.print()
 
 
+_AUTO_SENTINEL = "__AUTO__"
+
+
 def show_course_list(courses: List[Course], details: List[Optional[CourseDetail]]) -> Optional[Course]:
     """
     과목 목록을 테이블로 표시하고 선택된 Course를 반환한다.
     0 입력 시 None 반환 (종료). 'setting' 입력 시 설정 화면으로 이동.
+    'auto' 입력 시 _AUTO_SENTINEL 반환 (자동 모드 진입 신호).
     details는 courses와 같은 순서의 CourseDetail 리스트 (로딩 실패 시 None).
     """
     _redraw_course_list(courses, details)
 
     while True:
-        choice = Prompt.ask("  과목 선택 [dim](0: 종료 / setting: 설정)[/dim]")
+        choice = Prompt.ask("  과목 선택 [dim](0: 종료 / setting: 설정 / auto: 자동 모드)[/dim]")
         if choice == "0":
             return None
         if choice.lower() == "setting":
@@ -84,6 +88,8 @@ def show_course_list(courses: List[Course], details: List[Optional[CourseDetail]
             run_settings()
             _redraw_course_list(courses, details)
             continue
+        if choice.lower() == "auto":
+            return _AUTO_SENTINEL  # type: ignore[return-value]
         if choice.isdigit() and 1 <= int(choice) <= len(courses):
             return courses[int(choice) - 1]
         console.print("  [red]올바른 번호를 입력하세요.[/red]")
@@ -218,3 +224,15 @@ def _show_lecture_action_menu(lec: LectureItem) -> LectureAction:
         if choice == "2":
             return LectureAction.DOWNLOAD
         return LectureAction.CANCEL
+
+
+async def _reload_details(scraper, courses: List[Course]) -> List[Optional[CourseDetail]]:
+    """자동 모드에서 강의 목록을 새로고침한다."""
+    details: List[Optional[CourseDetail]] = []
+    for course in courses:
+        try:
+            detail = await scraper.fetch_lectures(course)
+        except Exception:
+            detail = None
+        details.append(detail)
+    return details

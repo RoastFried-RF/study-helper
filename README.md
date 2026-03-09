@@ -48,6 +48,7 @@
 - **Speech to Text** — Whisper를 이용한 로컬 음성 텍스트 변환
 - **AI 요약** — 변환된 텍스트를 Gemini 또는 OpenAI API로 요약
 - **텔레그램 알림** — 재생 완료, 다운로드 실패, AI 요약 완료 시 알림 전송
+- **자동 모드** — 지정된 스케줄마다 미시청 강의를 자동으로 재생·다운로드·요약·알림 처리
 
 ---
 
@@ -102,7 +103,7 @@ docker compose run --rm study-helper
   2    데이터베이스              0 / 10        2025-1
   3    운영체제                  5 / 15        2025-1
 
-  과목 선택 (0: 종료 / setting: 설정):
+  과목 선택 (0: 종료 / setting: 설정 / auto: 자동 모드):
 ```
 
 과목 선택 후 주차별 강의 목록이 표시됩니다. 강의를 선택하면 다음 메뉴가 나타납니다:
@@ -176,8 +177,61 @@ Gemini API 키 발급 방법은 [Gemini API 키 발급 가이드](docs/gemini-ap
 
 ---
 
+## 자동 모드
+
+과목 목록 화면에서 `auto`를 입력하면 자동 모드로 진입합니다.
+
+자동 모드는 지정된 스케줄(기본: KST 09:00 / 13:00 / 18:00 / 23:00)마다 미시청 강의를 자동으로 처리합니다.
+
+```
+재생(출석) → 다운로드 → STT 변환 → AI 요약 → 텔레그램 알림
+```
+
+대기 화면에서 `0`을 입력하면 자동 모드가 종료됩니다.
+
+### 자동 모드 필수 조건
+
+자동 모드를 사용하려면 아래 항목이 모두 설정되어 있어야 합니다. 미충족 시 설정 화면으로 안내됩니다.
+
+| 항목 | 설정 위치 |
+|------|-----------|
+| STT 활성화 | 설정 → 텍스트 변환(STT) |
+| AI 요약 활성화 + API 키 | 설정 → AI 요약 |
+| 텔레그램 알림 활성화 + 봇 토큰/Chat ID | 설정 → 텔레그램 알림 |
+
+### 주의사항
+
+- **자동 모드 중에는 프로그램을 종료하지 마세요.** 재생 중 강제 종료 시 출석이 처리되지 않을 수 있습니다.
+- 자동 모드는 `completion != completed` 상태인 모든 미시청 강의를 대상으로 합니다. 이미 수동으로 시청한 강의는 제외됩니다.
+- 다운로드 형식은 설정의 `다운로드 규칙`을 따릅니다.
+- 오류가 발생한 강의는 건너뛰고 텔레그램으로 오류 알림이 발송됩니다.
+
+---
+
 ## 주의사항
 
 - 본 도구는 개인 학습 목적으로만 사용하세요.
 - LMS 서비스 약관을 준수하여 사용하시기 바랍니다.
 - 학번, 비밀번호, API 키는 암호화되어 저장되며 `.env` 파일은 절대 외부에 공유하지 마세요.
+
+### 면책 조항
+
+본 프로젝트는 개인 학습 편의를 위해 제작된 비공식 도구입니다.
+
+- 본 프로젝트의 사용으로 인해 발생하는 학사 불이익, 계정 제재, 데이터 손실 등 모든 결과에 대한 책임은 전적으로 사용자 본인에게 있습니다.
+- 개발자는 어떠한 법적·도의적 책임도 지지 않습니다.
+- 본 프로젝트는 [Claude AI](https://claude.ai)를 활용하여 개발되었습니다.
+
+---
+
+## 라이선스
+
+MIT License
+
+Copyright (c) 2025 study-helper contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
