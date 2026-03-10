@@ -18,12 +18,8 @@ COPY pyproject.toml uv.lock* ./
 # pip/wheel/setuptools 최신 버전으로 업그레이드 (CVE-2025-8869, CVE-2026-24049 대응)
 RUN pip install --no-cache-dir --upgrade pip wheel setuptools
 
-# torch CPU 전용 설치 — GPU 없는 Docker 환경 최적화
-# full torch 대비 이미지 크기 ~1/3 수준으로 감소 (~700MB vs ~2.5GB)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-
-# 나머지 패키지 설치 (torch는 위에서 설치했으므로 제외)
-RUN uv sync --frozen --no-dev --no-install-package torch
+# 패키지 설치
+RUN uv sync --frozen --no-dev
 
 # Chrome(H.264 포함)을 우선 설치, ARM64 등 미지원 환경에서는 Chromium으로 fallback.
 # Google Chrome은 Linux amd64만 지원 — Apple Silicon(arm64) Docker에서는 Chromium 사용.
@@ -36,7 +32,7 @@ COPY CHANGELOG.md ./
 
 # 다운로드 경로 및 캐시 디렉토리 생성
 RUN mkdir -p /data/downloads \
-    && mkdir -p /root/.cache/whisper \
+    && mkdir -p /root/.cache/huggingface \
     && mkdir -p /root/.cache/ms-playwright
 
 ENV PYTHONUNBUFFERED=1 \

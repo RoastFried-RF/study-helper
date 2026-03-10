@@ -25,7 +25,7 @@ services:
       - ./.secret_key:/app/.secret_key
 
       # 소스 코드 실시간 반영 — 로컬 빌드 사용 시에만 활성화
-      # ── Docker Hub 이미지 사용 시 아래 줄 제거 ──────────────────────
+      # ── Docker Hub 이미지 사용 시 아래 두 줄 주석 처리 ───────────────
       # - ./src:/app/src
       # ──────────────────────────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ services:
       - ./data:/data
 
       # Whisper 모델 캐시 — 재빌드 시 재다운로드 방지 (~150MB/base, ~1.5GB/large)
-      - whisper-cache:/root/.cache/whisper
+      - whisper-cache:/root/.cache/huggingface
 
       # Playwright Chromium 캐시 — 재빌드 시 재다운로드 방지
       - playwright-cache:/root/.cache/ms-playwright

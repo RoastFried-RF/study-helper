@@ -1,5 +1,18 @@
 # Changelog
 
+## [v1.1.0] - 2026-03-10
+
+### 변경
+- **STT 엔진 교체**: `openai-whisper` → `faster-whisper` (CTranslate2 기반)
+  - PyTorch 의존성 완전 제거 → Docker 이미지 크기 약 700MB 감소
+  - CPU에서 약 2.5배 속도 향상 (INT8 양자화 적용)
+  - 인식률 동일 또는 소폭 개선
+  - wav 중간 파일 없이 mp3/mp4 직접 처리 (faster-whisper 내장 PyAV 오디오 디코딩)
+  - 모델 캐시 경로 변경: `~/.cache/whisper` → `~/.cache/huggingface`
+- **Dockerfile 간소화**: `pip install torch` 레이어 제거
+
+---
+
 ## [v1.0.3] - 2026-03-10
 
 ### 수정
