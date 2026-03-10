@@ -4,23 +4,29 @@
 
 ---
 
+## 구동화면 샘플
+
+**과목 목록**
+
+![과목 목록](images/dashboard.PNG)
+
+**강의 목록**
+
+![강의 목록](images/video_list.PNG)
+
+---
+
 ## 기술 스택
 
-| 분류 | 기술 |
-|------|------|
-| Language | ![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white) |
-| Browser Automation | ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white) ![Chromium](https://img.shields.io/badge/Chromium-4285F4?style=flat-square&logo=googlechrome&logoColor=white) |
-| CUI | ![Rich](https://img.shields.io/badge/Rich-000000?style=flat-square&logo=python&logoColor=white) |
-| Media | ![ffmpeg](https://img.shields.io/badge/ffmpeg-007808?style=flat-square&logo=ffmpeg&logoColor=white) ![Whisper](https://img.shields.io/badge/Whisper-412991?style=flat-square&logo=openai&logoColor=white) |
-| AI | ![Google Gemini](https://img.shields.io/badge/Google_Gemini-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat-square&logo=openai&logoColor=white) |
-| Notification | ![Telegram](https://img.shields.io/badge/Telegram-26A5E4?style=flat-square&logo=telegram&logoColor=white) |
-| Infrastructure | ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white) |
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white) ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white) ![Chromium](https://img.shields.io/badge/Chromium-4285F4?style=flat-square&logo=googlechrome&logoColor=white) ![Rich](https://img.shields.io/badge/Rich-000000?style=flat-square&logo=python&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+
+![ffmpeg](https://img.shields.io/badge/ffmpeg-007808?style=flat-square&logo=ffmpeg&logoColor=white) ![Whisper](https://img.shields.io/badge/Whisper-412991?style=flat-square&logo=openai&logoColor=white) ![Google Gemini](https://img.shields.io/badge/Google_Gemini-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat-square&logo=openai&logoColor=white) ![Telegram](https://img.shields.io/badge/Telegram-26A5E4?style=flat-square&logo=telegram&logoColor=white)
 
 ---
 
 ## 주요 기능
 
-- **백그라운드 재생** — 영상/소리 출력 없이 출석 처리 목적으로 강의를 자동 재생
+- **백그라운드 재생** — 영상/소리 출력 없이 강의를 자동 재생
 - **영상 다운로드** — 강의 영상을 mp4로 저장
 - **음성 추출** — 강의 영상에서 음성을 mp3로 추출
 - **Speech to Text** — Whisper를 이용한 로컬 음성 텍스트 변환
@@ -36,8 +42,8 @@
 |------|------|
 | 숭실대 LMS 계정 | 학번 + 비밀번호 |
 | Docker | 컨테이너 실행 환경 |
-| Gemini API 키 *(선택)* | AI 요약 사용 시 필요 — [발급 방법](docs/gemini-api-key.md) |
-| 텔레그램 봇 *(선택)* | 알림 수신 시 필요 — [설정 방법](docs/telegram-setup.md) |
+| Gemini API 키 *(권장)* | AI 요약 사용 시 필요 — [발급 방법](docs/gemini-api-key.md) |
+| 텔레그램 봇 *(권장)* | 알림 수신 시 필요 — [설정 방법](docs/telegram-setup.md) |
 
 ---
 
@@ -166,6 +172,8 @@ Gemini API 키 발급 방법은 [Gemini API 키 발급 가이드](docs/gemini-ap
 ---
 
 ## 자동 모드
+
+![자동 모드](images/auto_mod.PNG)
 
 과목 목록 화면에서 `auto`를 입력하면 자동 모드로 진입합니다.
 
