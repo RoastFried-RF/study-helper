@@ -17,6 +17,7 @@ from src.ui.login import (
     show_login_success,
 )
 from src.ui.courses import LectureAction, _AUTO_SENTINEL, show_course_list, show_week_list
+from src.updater import check_update
 from src.ui.player import run_player
 from src.ui.download import run_download
 from src.ui.settings import run_settings
@@ -74,9 +75,12 @@ async def run():
     if not Config.has_settings():
         run_settings()
 
-    # ── 3. 과목 목록 로드 ────────────────────────────────────────
+    # ── 3. 과목 목록 로드 + 버전 체크 (병렬) ─────────────────────
     try:
-        courses, details = await _load_courses(scraper)
+        (courses, details), latest_version = await asyncio.gather(
+            _load_courses_task(scraper),
+            _check_update_compat(),
+        )
     except Exception as e:
         console.print(f"\n  [bold red]과목 목록 로드 실패:[/bold red] {e}")
         await scraper.close()
@@ -84,7 +88,7 @@ async def run():
 
     # ── 4. 과목 선택 루프 ────────────────────────────────────────
     while True:
-        selected = show_course_list(courses, details, user_id=user_id)
+        selected = show_course_list(courses, details, user_id=user_id, latest_version=latest_version)
         if selected is None:
             console.print("\n  [dim]종료합니다.[/dim]\n")
             break
@@ -135,6 +139,17 @@ async def _try_login(user_id: str, password: str) -> Optional[CourseScraper]:
     except Exception:
         await scraper.close()
         return None
+
+
+async def _load_courses_task(scraper: CourseScraper):
+    """_load_courses를 asyncio.gather용으로 래핑한다."""
+    return await _load_courses(scraper)
+
+
+async def _check_update_compat():
+    """버전 체크를 비동기 태스크로 실행한다. 실패 시 None 반환."""
+    from src.config import APP_VERSION
+    return check_update(APP_VERSION)
 
 
 async def _load_courses(scraper: CourseScraper):
