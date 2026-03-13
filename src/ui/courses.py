@@ -113,7 +113,7 @@ def show_course_list(
     _redraw_course_list(courses, details, user_id, latest_version)
 
     while True:
-        choice = Prompt.ask("  과목 선택 [dim](0: 종료 / setting: 설정 / auto: 자동 모드)[/dim]")
+        choice = Prompt.ask("  과목 선택 [dim](0: 종료 / setting: 설정 / auto: 자동 모드)[/dim]").strip()
         if choice == "0":
             return None
         if choice.lower() == "setting":
@@ -142,7 +142,7 @@ def show_week_list(course: Course, detail: CourseDetail) -> tuple[LectureItem, L
 
         # 강의 번호 선택
         while True:
-            choice = Prompt.ask("  강의 선택 [dim](0: 돌아가기)[/dim]")
+            choice = Prompt.ask("  강의 선택 [dim](0: 돌아가기)[/dim]").strip()
             if choice == "0":
                 return None
             if choice.isdigit() and 1 <= int(choice) <= len(all_lectures):
