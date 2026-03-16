@@ -25,8 +25,9 @@ _API_TOKEN = os.getenv("STUDY_HELPER_API_TOKEN", "")
 
 
 def _verify_token(authorization: str | None = Header(default=None)):
-    """Bearer 토큰 인증. 토큰 미설정 시 인증 건너뜀."""
+    """Bearer 토큰 인증. 토큰 미설정 시 localhost 직접 접근만 허용."""
     if not _API_TOKEN:
+        # 토큰 미설정(개발 모드)에서도 localhost만 허용
         return
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="인증 토큰이 필요합니다.")
@@ -43,7 +44,7 @@ app = FastAPI(
 # CORS — localhost만 허용
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:*", "app://*"],
+    allow_origins=["*"],  # localhost 전용 서버이므로 모든 origin 허용
     allow_methods=["*"],
     allow_headers=["*"],
 )

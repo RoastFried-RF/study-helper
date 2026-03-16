@@ -202,7 +202,7 @@ class Config:
     @classmethod
     def _save_env(cls, keys_to_update: dict) -> None:
         """지정한 키/값을 .env 파일에 저장(덮어쓰기)한다."""
-        env_path = Path(__file__).parent.parent / ".env"
+        env_path = _env_path
         lines = []
 
         if env_path.exists():

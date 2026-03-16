@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -65,20 +66,33 @@ def resolve_path(body: ResolvePathRequest):
     return {"path": str(result)}
 
 
+def _validate_path_in_download_dir(file_path: str) -> Path:
+    """파일 경로가 다운로드 디렉토리 내에 있는지 검증한다."""
+    from fastapi import HTTPException
+
+    p = Path(file_path).resolve()
+    base = Path(Config.get_download_dir()).resolve()
+    if not p.is_relative_to(base):
+        raise HTTPException(status_code=400, detail="허용되지 않은 파일 경로")
+    return p
+
+
 @router.post("/convert")
 def convert(body: ConvertRequest):
     """mp4를 mp3로 변환한다."""
-    mp3_path = convert_to_audio(Path(body.mp4_path), delete_original=body.delete_original)
+    mp4 = _validate_path_in_download_dir(body.mp4_path)
+    mp3_path = convert_to_audio(mp4, delete_original=body.delete_original)
     return {"mp3_path": str(mp3_path)}
 
 
 @router.post("/transcribe")
 async def transcribe(body: TranscribeRequest):
     """음성을 텍스트로 변환한다 (STT)."""
+    audio = _validate_path_in_download_dir(body.audio_path)
     loop = asyncio.get_running_loop()
     txt_path = await loop.run_in_executor(
         None,
-        lambda: transcribe_audio(Path(body.audio_path), model_size=body.model_size, language=body.language),
+        lambda: transcribe_audio(audio, model_size=body.model_size, language=body.language),
     )
     return {"txt_path": str(txt_path)}
 
@@ -104,11 +118,20 @@ async def summarize(body: SummarizeRequest):
 async def pipeline_ws(ws: WebSocket):
     """다운로드 후속 파이프라인을 WebSocket으로 실행한다.
 
-    클라이언트가 JSON으로 PipelineRequest를 보내면,
+    첫 번째 메시지로 토큰 인증 후 PipelineRequest를 수신하면,
     각 단계의 진행 상태를 JSON 메시지로 스트리밍한다.
     """
     await ws.accept()
     try:
+        # WebSocket 토큰 인증 (첫 메시지)
+        _api_token = os.getenv("STUDY_HELPER_API_TOKEN", "")
+        if _api_token:
+            auth_msg = await ws.receive_json()
+            if auth_msg.get("token") != _api_token:
+                await ws.send_json({"type": "error", "message": "인증 실패"})
+                await ws.close(code=4003)
+                return
+
         data = await ws.receive_json()
         req = PipelineRequest(**data)
 
