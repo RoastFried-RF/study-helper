@@ -205,16 +205,26 @@ class CourseScraper:
 
         async def _fetch_one(idx: int, course: Course):
             async with sem:
-                page = await self._context.new_page()
-                try:
-                    results[idx] = await self._fetch_lectures_on(page, course)
-                except Exception as e:
-                    self._log(f"강의 로딩 실패 ({course.long_name}): {e}")
-                    results[idx] = None
-                finally:
-                    await page.close()
-                    if on_complete:
-                        on_complete()
+                max_retries = 2
+                for attempt in range(max_retries + 1):
+                    page = await self._context.new_page()
+                    try:
+                        results[idx] = await self._fetch_lectures_on(page, course)
+                        break
+                    except Exception as e:
+                        if attempt < max_retries:
+                            self._log(
+                                f"강의 로딩 실패 ({course.long_name}), "
+                                f"재시도 {attempt + 1}/{max_retries}: {e}"
+                            )
+                            await asyncio.sleep(1)
+                        else:
+                            self._log(f"강의 로딩 실패 ({course.long_name}): {e}")
+                            results[idx] = None
+                    finally:
+                        await page.close()
+                if on_complete:
+                    on_complete()
 
         await asyncio.gather(*[_fetch_one(i, c) for i, c in enumerate(courses)])
         return results
@@ -237,12 +247,12 @@ class CourseScraper:
             # lock 해제 후 쿠키가 공유되었으므로 페이지만 다시 이동
             await page.goto(course.lectures_url, wait_until="networkidle")
 
-        iframe_el = await page.wait_for_selector("iframe#tool_content", timeout=15000)
+        iframe_el = await page.wait_for_selector("iframe#tool_content", timeout=30000)
         iframe = await iframe_el.content_frame()
         if not iframe:
             raise RuntimeError("iframe을 찾을 수 없습니다.")
 
-        await iframe.wait_for_selector("#root", timeout=15000)
+        await iframe.wait_for_selector("#root", timeout=30000)
         await asyncio.sleep(0.5)
 
         root = await iframe.query_selector("#root")

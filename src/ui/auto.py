@@ -208,15 +208,17 @@ async def run_auto_mode(scraper, courses, details) -> None:
             # LMS에서 여전히 미시청인 강의는 progress에서 제거하여 재시도
             completed = _load_progress()
             still_incomplete: set[str] = set()
-            pending_list: list[tuple] = []  # (course, lec)
+            all_needs_watch: list[tuple] = []
+            total_videos = 0
             for course, detail in zip(courses, details, strict=False):
                 if detail is None:
                     continue
                 for lec in detail.all_video_lectures:
+                    total_videos += 1
                     if lec.needs_watch:
                         if lec.full_url in completed:
                             still_incomplete.add(lec.full_url)
-                        pending_list.append((course, lec))
+                        all_needs_watch.append((course, lec))
 
             # LMS가 여전히 미완료로 보는 항목은 progress에서 제거
             stale = completed & still_incomplete
@@ -224,6 +226,16 @@ async def run_auto_mode(scraper, courses, details) -> None:
                 completed -= stale
                 _save_progress(completed)
                 console.print(f"  [dim]이전 처리 후 미완료 {len(stale)}건 재시도 대상[/dim]")
+
+            # progress에 없는 (아직 미처리) 강의만 대상
+            pending_list = [
+                (c, l) for c, l in all_needs_watch if l.full_url not in completed
+            ]
+
+            console.print(
+                f"  [dim]전체 비디오 {total_videos}개 / 미시청 {len(all_needs_watch)}개 "
+                f"/ progress {len(completed)}개 / 대상 {len(pending_list)}개[/dim]"
+            )
 
             if not pending_list:
                 console.print("  [dim]미시청 강의가 없습니다.[/dim]")
