@@ -6,6 +6,7 @@ requests로 청크 스트리밍 다운로드한다.
 """
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import Callable
@@ -17,6 +18,8 @@ import requests
 from playwright.async_api import Page
 
 from src.player.background_player import _click_play, _dismiss_dialog, _find_player_frame
+
+_dl_log = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
 _TIMEOUT = (10, 60)  # (connect, read) seconds
@@ -116,9 +119,10 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
                     if media_uri and captured["url"] is None:
                         captured["url"] = media_uri
                 except Exception as e:
-                    print(f"  [NET] content.php 파싱 오류: {e}")
+                    _dl_log.debug("content.php 파싱 오류: %s", e)
 
-            _task = asyncio.ensure_future(_parse_content_php())  # noqa: RUF006
+            task = asyncio.ensure_future(_parse_content_php())
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
 
     page.on("request", _on_request)
     page.on("response", _on_response)
@@ -257,17 +261,24 @@ async def download_video_with_browser(
     cookies = {c["name"]: c["value"] for c in context_cookies}
 
     referer = "https://commons.ssu.ac.kr/"
+    # 재시도 가능한 오류: 네트워크 불안정, 청크 인코딩 오류 등
+    _RETRYABLE = (IncompleteRead, requests.exceptions.ChunkedEncodingError,
+                  requests.exceptions.ConnectionError, requests.exceptions.Timeout)
     last_error: Exception | None = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             _stream_download(url, save_path, on_progress, attempt=attempt, cookies=cookies, referer=referer)
             return save_path.resolve()
-        except Exception as e:
+        except _RETRYABLE as e:
             last_error = e
-            # 이어받기 실패(206에서 오류) 시 부분 파일 삭제 후 처음부터
+            _remove_partial(save_path)
             if attempt < _MAX_RETRIES:
-                _remove_partial(save_path)
                 time.sleep(2**attempt)
+        except Exception as e:
+            # 재시도 불가능한 오류 (ValueError, 인증 실패 등) → 즉시 중단
+            last_error = e
+            _remove_partial(save_path)
+            break
     _remove_partial(save_path)
     if last_error is None:
         raise RuntimeError("다운로드 실패: 알 수 없는 오류")

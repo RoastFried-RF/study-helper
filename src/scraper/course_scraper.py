@@ -185,6 +185,16 @@ class CourseScraper:
             )
         return courses
 
+    @property
+    def page(self) -> Page:
+        """Playwright Page 인스턴스 (player/downloader용)."""
+        return self._page
+
+    async def ensure_session(self) -> None:
+        """세션 유효성 확인 후 만료 시 재로그인한다."""
+        await self._page.goto(_DASHBOARD_URL, wait_until="domcontentloaded", timeout=15000)
+        await self._ensure_session()
+
     async def _ensure_session(self) -> None:
         """세션 만료 시 자동 재로그인을 시도한다."""
         if "login" in self._page.url:

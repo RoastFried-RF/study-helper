@@ -296,14 +296,7 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
 
     # ── 세션 유효성 체크 ─────────────────────────────────────────
     try:
-        page = scraper._page
-        await page.goto("https://canvas.ssu.ac.kr/", wait_until="domcontentloaded", timeout=15000)
-        if "login" in page.url:
-            _log.info("세션 만료 감지 — 재로그인 시도")
-            console.print("  [dim]  → 세션 만료 감지, 재로그인 중...[/dim]")
-            await scraper._ensure_session()
-            _log.info("재로그인 완료")
-            console.print("  [dim]  → 재로그인 완료[/dim]")
+        await scraper.ensure_session()
     except Exception as e:
         _log.warning("세션 확인 오류: %s (계속 시도)", e)
 
@@ -320,18 +313,14 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
             await asyncio.sleep(wait_sec)
             # 재시도 전 세션 갱신
             try:
-                page = scraper._page
-                await page.goto("https://canvas.ssu.ac.kr/", wait_until="domcontentloaded", timeout=15000)
-                if "login" in page.url:
-                    await scraper._ensure_session()
-                    console.print("  [dim]  → 재로그인 완료[/dim]")
+                await scraper.ensure_session()
             except Exception:
                 pass
         else:
             console.print("  [dim]  → 재생 중...[/dim]")
 
         try:
-            success, has_error = await run_player(scraper._page, lec)
+            success, has_error = await run_player(scraper.page, lec)
             if success:
                 play_success = True
                 break
@@ -361,7 +350,7 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
     both = rule == "both"
     console.print("  [dim]  → 다운로드 중...[/dim]")
     try:
-        ok = await run_download(scraper._page, lec, course, audio_only=audio_only, both=both)
+        ok = await run_download(scraper.page, lec, course, audio_only=audio_only, both=both)
         if not ok:
             console.print(f"  [yellow]  → 다운로드 실패: {label}[/yellow]")
             # run_download 내부에서 이미 텔레그램 알림 처리됨

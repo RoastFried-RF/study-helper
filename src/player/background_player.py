@@ -261,7 +261,7 @@ async def _report_completion(
     page: Page,
     player_url: str,
     duration: float,
-    log: Callable,
+    log: Callable[[str], None],
     commons_frame: Frame | None = None,
     use_page_eval: bool = False,
 ):
@@ -374,7 +374,7 @@ async def _play_via_learningx_api(
     page: Page,
     learningx_url: str,
     on_progress: Callable[[PlaybackState], None] | None,
-    log: Callable,
+    log: Callable[[str], None],
     fallback_duration: float = 0.0,
 ) -> PlaybackState:
     """
@@ -491,7 +491,7 @@ async def _play_via_progress_api(
     page: Page,
     player_url: str,
     on_progress: Callable[[PlaybackState], None] | None,
-    log: Callable,
+    log: Callable[[str], None],
     fallback_duration: float = 0.0,
 ) -> PlaybackState:
     """
@@ -627,7 +627,7 @@ async def _play_via_progress_api(
 # ── 공개 API ─────────────────────────────────────────────────────
 
 
-async def _debug_page_state(page: Page, frame: Frame | None, log: Callable):
+async def _debug_page_state(page: Page, frame: Frame | None, log: Callable[[str], None]):
     """현재 페이지/프레임 상태를 상세 출력한다."""
     log(f"  [현재 URL] {page.url}")
     log(f"  [전체 프레임 수] {len(page.frames)}")
@@ -844,7 +844,7 @@ async def _play_lecture_inner(
     on_progress: Callable[[PlaybackState], None] | None,
     debug: bool,
     fallback_duration: float,
-    log: Callable,
+    log: Callable[[str], None],
     state: PlaybackState,
     _using_fake_video: bool,
 ) -> PlaybackState:
