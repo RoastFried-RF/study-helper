@@ -141,8 +141,8 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         logger, log_path = get_error_logger("download")
         logger.info(f"강의: {lec.title}")
         logger.info(f"URL: {lec.full_url}")
-        logger.info("영상 URL: [CDN URL 로그 제외]")
-        logger.error(f"다운로드 실패: {e}")
+        logger.info(f"영상 URL: {video_url}")
+        logger.error(f"다운로드 실패: {e}", exc_info=True)
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
 

@@ -27,7 +27,7 @@ _CHUNK_SIZE = 65536  # 64 KB
 
 # 다운로드 허용 도메인 (SSRF 방어)
 _ALLOWED_SCHEMES = {"https", "http"}
-_ALLOWED_HOSTS_SUFFIX = (".ssu.ac.kr", ".commonscdn.net")
+_ALLOWED_HOSTS_SUFFIX = (".ssu.ac.kr", ".commonscdn.com", ".commonscdn.net")
 
 
 def _validate_media_url(url: str) -> None:
