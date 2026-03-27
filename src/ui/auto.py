@@ -262,6 +262,9 @@ async def run_auto_mode(scraper, courses, details) -> None:
                     completed.add(lec.full_url)
                     _save_progress(completed)
 
+            # ── 다운로드 누락 점검 ────────────────────────────────────
+            _check_download_gaps(courses, details)
+
             console.print()
             console.print("  [bold green]이번 스케줄 처리 완료.[/bold green]")
             console.print()
@@ -364,6 +367,61 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
     console.print(f"  [bold green]  → {label} 완료[/bold green]")
     console.print()
     return True
+
+
+def _check_download_gaps(courses, details) -> None:
+    """시청 완료된 강의 중 다운로드 파일이 누락된 항목을 점검한다."""
+    from pathlib import Path
+
+    from src.downloader.video_downloader import make_filepath
+
+    download_dir = Config.get_download_dir()
+    rule = Config.DOWNLOAD_RULE or "both"
+    missing = []
+
+    for course, detail in zip(courses, details, strict=False):
+        if detail is None:
+            continue
+        for lec in detail.all_video_lectures:
+            if lec.completion != "completed":
+                continue
+            # learningx 강의는 다운로드 불가이므로 제외
+            if "learningx" in lec.full_url:
+                continue
+            mp4_relpath = make_filepath(course.long_name, lec.week_label, lec.title)
+            mp4_path = Path(download_dir) / mp4_relpath
+            mp3_path = mp4_path.with_suffix(".mp3")
+
+            has_video = mp4_path.exists()
+            has_audio = mp3_path.exists()
+
+            if rule == "video" and not has_video:
+                missing.append((course.long_name, lec.week_label, lec.title, "mp4"))
+            elif rule == "audio" and not has_audio:
+                missing.append((course.long_name, lec.week_label, lec.title, "mp3"))
+            elif rule == "both" and not (has_video or has_audio):
+                missing.append((course.long_name, lec.week_label, lec.title, "mp4+mp3"))
+
+    if missing:
+        console.print()
+        console.print(f"  [yellow]다운로드 누락 {len(missing)}건 감지:[/yellow]")
+        for course_name, week, title, ftype in missing[:10]:
+            console.print(f"  [dim]  → [{course_name}] {week} {title} ({ftype})[/dim]")
+        if len(missing) > 10:
+            console.print(f"  [dim]  → ... 외 {len(missing) - 10}건[/dim]")
+        _log.warning("다운로드 누락 %d건: %s", len(missing), ", ".join(f"{t}" for _, _, t, _ in missing[:5]))
+
+        # 텔레그램 알림
+        creds = Config.get_telegram_credentials()
+        if creds:
+            from src.notifier.telegram_notifier import _send_message
+
+            lines = [f"[다운로드 누락 점검] {len(missing)}건 감지"]
+            for course_name, week, title, ftype in missing[:10]:
+                lines.append(f"  • {course_name} {week} {title} ({ftype})")
+            if len(missing) > 10:
+                lines.append(f"  ... 외 {len(missing) - 10}건")
+            _send_message(creds[0], creds[1], "\n".join(lines))
 
 
 def _tg_error_notify(course, lec, error_msg: str) -> None:
