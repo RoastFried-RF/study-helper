@@ -199,6 +199,20 @@ async def run_auto_mode(scraper, courses, details) -> None:
             except Exception as e:
                 _log.error("강의 목록 갱신 실패: %s", e)
                 console.print(f"  [red]강의 목록 갱신 실패: {e}[/red]")
+
+                # 브라우저 연결 끊김 감지 시 자동 재시작
+                if "Connection closed" in str(e) or "socket" in str(e).lower():
+                    console.print("  [yellow]브라우저 연결 끊김 — 재시작 시도...[/yellow]")
+                    _log.info("브라우저 재시작 시도")
+                    try:
+                        await scraper.close()
+                        await scraper.start()
+                        console.print("  [dim]브라우저 재시작 완료[/dim]")
+                        _log.info("브라우저 재시작 완료")
+                    except Exception as restart_e:
+                        _log.error("브라우저 재시작 실패: %s", restart_e)
+                        console.print(f"  [red]브라우저 재시작 실패: {restart_e}[/red]")
+
                 await asyncio.sleep(60)
                 continue
 

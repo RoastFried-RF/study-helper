@@ -146,10 +146,16 @@ class CourseScraper:
             self._log("로그인 완료")
 
     async def close(self):
-        if self._browser:
-            await self._browser.close()
-        if self._pw:
-            await self._pw.stop()
+        try:
+            if self._browser:
+                await self._browser.close()
+        except Exception:
+            pass  # 브라우저 프로세스가 이미 종료된 경우
+        try:
+            if self._pw:
+                await self._pw.stop()
+        except Exception:
+            pass
 
     async def fetch_courses(self) -> list[Course]:
         """대시보드에서 수강 과목 목록 추출"""

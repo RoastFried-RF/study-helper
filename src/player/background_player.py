@@ -973,8 +973,18 @@ async def _play_lecture_inner(
     else:
         log("[6] 타임아웃. 페이지 상태 진단:")
         await _debug_page_state(page, frame, log)
-        state.error = "영상이 시작되지 않았습니다."
-        return state
+        # video error=4 (MEDIA_ERR_SRC_NOT_SUPPORTED) 등으로 영상 로드 실패 시
+        # Plan B(progress API)로 전환 — commons frame URL 사용 (sl=1 포함)
+        plan_b_url = frame.url if frame and "commons.ssu.ac.kr" in frame.url else player_url_snapshot
+        log(f"[6] 영상 로드 실패 → Plan B(진도 API) 전환 시도 (url={plan_b_url[:80]}...)")
+        try:
+            return await _play_via_progress_api(
+                page, plan_b_url, on_progress, log, fallback_duration
+            )
+        except Exception as plan_b_e:
+            log(f"[6] Plan B 전환 실패: {plan_b_e}")
+            state.error = "영상이 시작되지 않았습니다."
+            return state
 
     # 6.5. GetCurrentTime/GetTotalDuration 오버라이드
     # 가짜 WebM 재생 시 GetCurrentTime()이 apiManager 내부 상태(=0)를 반환해
