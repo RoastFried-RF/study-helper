@@ -62,10 +62,9 @@ class CourseScraper:
         _args = [
             "--disable-blink-features=AutomationControlled",
             "--enable-proprietary-codecs",
-            "--disable-web-security",
             "--use-fake-ui-for-media-stream",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
+            "--no-sandbox",  # Docker root 환경 필수 — non-root 전환 시 제거
+            "--disable-setuid-sandbox",  # Docker root 환경 필수
             "--disable-dev-shm-usage",
             "--disable-accelerated-2d-canvas",
             "--no-first-run",
@@ -86,6 +85,8 @@ class CourseScraper:
                 headless=self.headless,
                 args=_args,
             )
+        # browser를 즉시 self에 할당하여 이후 실패 시에도 close()에서 정리 가능
+        self._browser = browser
         context = await browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -95,6 +96,7 @@ class CourseScraper:
             permissions=["camera", "microphone", "geolocation"],
             viewport={"width": 1280, "height": 720},
         )
+        self._context = context
         try:
             await context.add_init_script("""
                 // webdriver 속성 제거
@@ -129,8 +131,8 @@ class CourseScraper:
             page = await context.new_page()
         except Exception:
             await context.close()
+            self._context = None
             raise
-        self._context = context
         return page, browser
 
     async def start(self):
@@ -147,6 +149,11 @@ class CourseScraper:
 
     async def close(self):
         try:
+            if self._context:
+                await self._context.close()
+        except Exception:
+            pass
+        try:
             if self._browser:
                 await self._browser.close()
         except Exception:
@@ -156,6 +163,12 @@ class CourseScraper:
                 await self._pw.stop()
         except Exception:
             pass
+        # 참조 해제 — GC가 Playwright 리소스를 즉시 수거할 수 있도록
+        self._page = None
+        self._context = None
+        self._browser = None
+        self._pw = None
+        self._session_restored = False
 
     async def fetch_courses(self) -> list[Course]:
         """대시보드에서 수강 과목 목록 추출"""
@@ -253,7 +266,10 @@ class CourseScraper:
                             )
                             results[idx] = None
                     finally:
-                        await page.close()
+                        try:
+                            await page.close()
+                        except Exception:
+                            self._file_log.warning("탭 닫기 실패 (%s)", course.long_name)
                 if on_complete:
                     on_complete()
 

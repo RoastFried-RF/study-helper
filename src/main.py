@@ -129,15 +129,25 @@ async def run():
                     _tg_notify_playback_complete(selected.long_name, lec)
                 else:
                     _tg_notify_playback_error(selected.long_name, lec, failed=has_error)
-                input("\n  Enter를 눌러 계속...")
+                await asyncio.get_running_loop().run_in_executor(None, lambda: input("\n  Enter를 눌러 계속..."))
             elif action == LectureAction.DOWNLOAD:
                 rule = Config.DOWNLOAD_RULE or "both"
                 audio_only = rule == "audio"
                 both = rule == "both"
                 await run_download(scraper.page, lec, selected, audio_only=audio_only, both=both)
-                input("\n  Enter를 눌러 계속...")
+                await asyncio.get_running_loop().run_in_executor(None, lambda: input("\n  Enter를 눌러 계속..."))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        console.print("\n  [dim]종료 중...[/dim]")
     finally:
-        await scraper.close()
+        if scraper:
+            await scraper.close()
+        # STT 모델이 로드되어 있으면 해제
+        try:
+            from src.stt.transcriber import unload_model
+
+            unload_model()
+        except Exception:
+            pass
 
 
 async def _try_login(user_id: str, password: str) -> CourseScraper | None:

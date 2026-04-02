@@ -7,6 +7,7 @@
 
 import asyncio
 from pathlib import Path
+from urllib.parse import urlparse
 
 from rich.console import Console
 from rich.live import Live
@@ -24,6 +25,9 @@ from rich.text import Text
 
 from src.config import Config
 from src.logger import get_error_logger
+
+_MAX_URL_RETRIES = 3
+_RETRY_WAIT = 10  # seconds
 
 console = Console()
 
@@ -72,9 +76,6 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         return False
 
     # 2. video URL 추출 (최대 3회 재시도)
-    _MAX_URL_RETRIES = 3
-    _RETRY_WAIT = 10  # seconds
-
     video_url = None
     for attempt in range(1, _MAX_URL_RETRIES + 1):
         if attempt == 1:
@@ -92,7 +93,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print("  [bold red]오류:[/bold red] 영상 URL을 찾지 못했습니다. (3회 시도)")
         logger, log_path = get_error_logger("download")
         logger.info("강의: %s", lec.title)
-        logger.info("URL: %s", lec.full_url)
+        logger.info("URL: %s", urlparse(lec.full_url)._replace(query="", fragment="").geturl())
         logger.info("오류: 영상 URL 추출 실패 (3회 재시도 후에도 실패)")
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
@@ -140,7 +141,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print(f"  [bold red]다운로드 실패:[/bold red] {e}")
         logger, log_path = get_error_logger("download")
         logger.info("강의: %s", lec.title)
-        logger.info("URL: %s", lec.full_url)
+        logger.info("URL: %s", urlparse(lec.full_url)._replace(query="", fragment="").geturl())
         logger.info("영상 URL: %s", video_url)
         logger.error("다운로드 실패: %s", e, exc_info=True)
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
@@ -199,7 +200,6 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
             console.print("  [yellow]AI 요약 건너뜀: API 키가 설정되지 않았습니다.[/yellow]")
         else:
             import warnings
-            from concurrent.futures import ThreadPoolExecutor
 
             from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, summarize
 
@@ -218,17 +218,16 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
                         loop = asyncio.get_running_loop()
-                        with ThreadPoolExecutor() as pool:
-                            summary_path = await loop.run_in_executor(
-                                pool,
-                                lambda: summarize(
-                                    txt_path,
-                                    agent=Config.AI_AGENT or "gemini",
-                                    api_key=api_key,
-                                    model=model or GEMINI_DEFAULT_MODEL,
-                                    extra_prompt=Config.SUMMARY_PROMPT_EXTRA,
-                                ),
-                            )
+                        summary_path = await loop.run_in_executor(
+                            None,
+                            lambda: summarize(
+                                txt_path,
+                                agent=Config.AI_AGENT or "gemini",
+                                api_key=api_key,
+                                model=model or GEMINI_DEFAULT_MODEL,
+                                extra_prompt=Config.SUMMARY_PROMPT_EXTRA,
+                            ),
+                        )
                 console.print("  [bold green]AI 요약 완료![/bold green]")
                 console.print(f"  [dim]{summary_path}[/dim]")
             except Exception as e:

@@ -4,16 +4,21 @@
 재생 완료 알림과 AI 요약 결과 전송 기능을 제공한다.
 """
 
+import re
 from pathlib import Path
 
 import requests
 
 # Telegram 메시지 최대 길이 (API 명세)
 _TELEGRAM_MAX_MESSAGE_LEN = 4096
+# 봇 토큰 형식: 숫자:영문숫자_하이픈 (URL 특수문자 방지)
+_BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
 
 
 def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
     """텔레그램 메시지를 전송한다. 응답 body의 ok 필드로 성공 여부를 판정한다."""
+    if not _BOT_TOKEN_RE.match(bot_token):
+        return False
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     try:
         resp = requests.post(
@@ -179,11 +184,14 @@ def notify_summary_complete(
     전송 성공 시 auto_delete_files에 포함된 파일을 삭제한다.
     """
     label = _lecture_label(course_name, week_label, lecture_title)
-    text = f"[알림] {label}의 요약 내용을 다음과 같이 제공해드립니다.\n\n{summary_text}"
+    header = f"[알림] {label}의 요약 내용을 다음과 같이 제공해드립니다.\n\n"
+    text = header + summary_text
 
-    # 요약 내용 텍스트 메시지 전송 (4096자 초과 시 잘라서 전송)
-    chunks = [text[i : i + _TELEGRAM_MAX_MESSAGE_LEN] for i in range(0, len(text), _TELEGRAM_MAX_MESSAGE_LEN)]
-    msg_ok = all(_send_message(bot_token, chat_id, chunk) for chunk in chunks)
+    # 요약 내용 텍스트 메시지 전송 (4096자 초과 시 순차 전송, 실패해도 나머지 계속)
+    msg_ok = True
+    for i in range(0, len(text), _TELEGRAM_MAX_MESSAGE_LEN):
+        if not _send_message(bot_token, chat_id, text[i : i + _TELEGRAM_MAX_MESSAGE_LEN]):
+            msg_ok = False
 
     # 요약 파일 첨부 전송
     file_ok = _send_document(bot_token, chat_id, summary_path, caption=f"{label} 요약 파일")
@@ -240,7 +248,6 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
     Returns:
         (성공 여부, 오류 메시지 또는 빈 문자열)
     """
-    import requests
 
     try:
         resp = requests.get(

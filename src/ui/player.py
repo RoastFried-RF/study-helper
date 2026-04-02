@@ -4,6 +4,8 @@
 백그라운드 재생 진행 상태를 rich Progress bar로 표시한다.
 """
 
+from urllib.parse import urlparse
+
 from rich.console import Console
 from rich.live import Live
 from rich.progress import (
@@ -18,6 +20,11 @@ from src.config import Config
 from src.logger import get_error_logger
 from src.player.background_player import PlaybackState, play_lecture
 from src.scraper.models import LectureItem
+
+
+def _safe_url(url: str) -> str:
+    """URL에서 쿼리 파라미터를 제거하여 세션 토큰 노출을 방지한다."""
+    return urlparse(url)._replace(query="", fragment="").geturl()
 
 console = Console()
 
@@ -98,10 +105,27 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> tuple[bool,
     result: dict = {"state": None}
 
     # 오류 발생 시에만 파일에 기록할 로그 버퍼
-    log_buffer: list[str] = []
+    # 선두 450줄 + 말미 50줄을 유지하여 시작 컨텍스트와 종료 직전 상태 모두 보존
+    _LOG_HEAD_MAX = 450
+    _LOG_TAIL_MAX = 50
+    _log_head: list[str] = []
+    _log_tail: list[str] = []
+    _log_overflow = False
 
     def _log(msg: str):
-        log_buffer.append(msg)
+        nonlocal _log_overflow
+        if len(_log_head) < _LOG_HEAD_MAX:
+            _log_head.append(msg)
+        else:
+            _log_overflow = True
+            _log_tail.append(msg)
+            if len(_log_tail) > _LOG_TAIL_MAX:
+                _log_tail.pop(0)
+
+    def _get_log_buffer() -> list[str]:
+        if _log_overflow:
+            return [*_log_head, f"... ({_LOG_HEAD_MAX}줄 초과, 중간 생략)", *_log_tail]
+        return _log_head
 
     def on_progress(state: PlaybackState):
         """플레이어 콜백 → Progress bar 업데이트."""
@@ -138,10 +162,10 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> tuple[bool,
         # 오류 발생 시에만 로그 파일 생성
         logger, log_path = get_error_logger("play")
         logger.info(f"강의: {lec.title}")
-        logger.info(f"URL: {lec.full_url}")
+        logger.info(f"URL: {_safe_url(lec.full_url)}")
         logger.info(f"오류: {final_state.error}")
         logger.info("--- 재생 로그 ---")
-        for line in log_buffer:
+        for line in _get_log_buffer():
             logger.info(line)
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         _tg_playback_error(lec, failed=True)
@@ -154,10 +178,10 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> tuple[bool,
     # 재생 미완료(중단)도 로그 저장
     logger, log_path = get_error_logger("play")
     logger.info(f"강의: {lec.title}")
-    logger.info(f"URL: {lec.full_url}")
+    logger.info(f"URL: {_safe_url(lec.full_url)}")
     logger.info(f"상태: 재생 미완료 (current={final_state.current:.1f}s / duration={final_state.duration:.1f}s)")
     logger.info("--- 재생 로그 ---")
-    for line in log_buffer:
+    for line in _get_log_buffer():
         logger.info(line)
     console.print("  [yellow]재생이 중단되었습니다.[/yellow]")
     console.print(f"  [dim]로그 저장: {log_path}[/dim]")

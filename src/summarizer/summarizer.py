@@ -78,6 +78,7 @@ def summarize(txt_path: Path, agent: str, api_key: str, model: str, extra_prompt
         raise ValueError("텍스트 파일이 비어 있습니다.")
 
     prompt = _SUMMARY_PROMPT.format(text=text)
+    del text  # 원본 텍스트 즉시 해제 (프롬프트에 이미 포함됨)
     if extra_prompt:
         prompt += _EXTRA_PROMPT_TEMPLATE.format(extra=extra_prompt)
 
@@ -87,6 +88,7 @@ def summarize(txt_path: Path, agent: str, api_key: str, model: str, extra_prompt
         summary = _summarize_openai(api_key, model, prompt)
     else:
         raise ValueError(f"지원하지 않는 AI 에이전트: {agent}")
+    del prompt  # 프롬프트 즉시 해제
 
     out_path = txt_path.with_stem(txt_path.stem + "_summarized")
     out_path.write_text(summary, encoding="utf-8")
@@ -101,14 +103,18 @@ def _summarize_gemini(api_key: str, model: str, prompt: str) -> str:
         raise RuntimeError("google-genai 패키지가 설치되어 있지 않습니다.\n설치: pip install google-genai") from None
 
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
-    )
-    return response.text
+    del api_key  # traceback에 키 노출 방지
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        return response.text
+    finally:
+        del client  # google-genai SDK에 close() 없음 — 참조 해제로 대체
 
 
 def _summarize_openai(api_key: str, model: str, prompt: str) -> str:
@@ -118,8 +124,12 @@ def _summarize_openai(api_key: str, model: str, prompt: str) -> str:
         raise RuntimeError("openai 패키지가 설치되어 있지 않습니다.\n설치: pip install openai") from None
 
     client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.choices[0].message.content
+    del api_key  # traceback에 키 노출 방지
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content
+    finally:
+        client.close()

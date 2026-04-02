@@ -63,9 +63,29 @@ def get_logger(name: str = "study_helper") -> logging.Logger:
     return _app_logger.getChild(name.removeprefix("study_helper."))
 
 
+_error_loggers: dict[str, tuple[logging.Logger, Path]] = {}
+
+
+def _cleanup_stale_error_loggers(today: str) -> None:
+    """오늘이 아닌 날짜의 에러 로거 핸들러를 닫고 캐시에서 제거한다."""
+    stale_keys = [k for k in _error_loggers if not k.endswith(today)]
+    for key in stale_keys:
+        logger, _ = _error_loggers.pop(key)
+        for handler in logger.handlers[:]:
+            try:
+                handler.close()
+            except Exception:
+                pass
+            logger.removeHandler(handler)
+
+
 def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
     """
-    오류 기록용 파일 로거를 생성한다. (기존 호환)
+    오류 기록용 파일 로거를 생성하거나 재사용한다. (기존 호환)
+
+    같은 action + 같은 날짜의 호출은 기존 로거를 재사용하여
+    핸들러/파일 디스크립터 누적을 방지한다.
+    날짜가 변경되면 이전 날짜의 핸들러를 자동으로 닫는다.
 
     Args:
         action: 로그 파일 이름에 포함할 동작 식별자 (예: "play", "download")
@@ -73,22 +93,36 @@ def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
     Returns:
         (logger, log_path) — 로거와 로그 파일 경로
     """
+    # 경로 탐색 방지
+    action = action.replace("/", "_").replace("\\", "_").replace("..", "_")
+    today = datetime.now().strftime("%Y%m%d")
+    cache_key = f"{action}_{today}"
+
+    if cache_key in _error_loggers:
+        return _error_loggers[cache_key]
+
+    # 날짜가 변경되었으면 이전 핸들러 정리
+    _cleanup_stale_error_loggers(today)
+
     _LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = _LOGS_DIR / f"{timestamp}_{action}.log"
 
-    logger = logging.getLogger(f"study_helper.{action}.{timestamp}")
-    logger.setLevel(logging.DEBUG)
-    logger.propagate = False
+    logger = logging.getLogger(f"study_helper.error.{cache_key}")
+    if not logger.hasHandlers():
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
 
-    handler = logging.FileHandler(log_path, encoding="utf-8")
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+        handler = logging.FileHandler(log_path, encoding="utf-8")
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        logger.addHandler(handler)
 
+    _error_loggers[cache_key] = (logger, log_path)
     return logger, log_path

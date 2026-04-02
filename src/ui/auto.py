@@ -34,6 +34,9 @@ _PROGRESS_FILE = get_data_path("auto_progress.json")
 # 재생 재시도 설정
 _MAX_PLAY_RETRIES = 3
 
+# 브라우저 메모리 누적 방지: N사이클마다 브라우저 재시작
+_BROWSER_RESTART_INTERVAL = 3
+
 
 def _load_progress() -> set[str]:
     """처리 완료된 강의 URL 목록을 로드한다."""
@@ -42,8 +45,8 @@ def _load_progress() -> set[str]:
             return set(json.loads(_PROGRESS_FILE.read_text(encoding="utf-8")))
     except json.JSONDecodeError:
         _log.warning("auto_progress.json 파싱 실패 — 초기화합니다.")
-    except Exception:
-        pass
+    except Exception as e:
+        _log.warning("auto_progress.json 로드 실패: %s", e)
     return set()
 
 
@@ -52,6 +55,10 @@ def _save_progress(completed: set[str]) -> None:
     try:
         _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
         _PROGRESS_FILE.write_text(json.dumps(sorted(completed)), encoding="utf-8")
+        try:
+            _PROGRESS_FILE.chmod(0o600)
+        except OSError:
+            pass  # Windows에서는 chmod 미지원
     except Exception as e:
         _log.warning("auto_progress.json 저장 실패: %s", e)
 
@@ -91,6 +98,8 @@ async def run_auto_mode(scraper, courses, details) -> None:
         courses:  Course 목록
         details:  CourseDetail 목록 (courses와 동일 순서)
     """
+    from src.ui.courses import _reload_details
+
     console.clear()
 
     # ── 필수 조건 체크 ────────────────────────────────────────────
@@ -150,6 +159,10 @@ async def run_auto_mode(scraper, courses, details) -> None:
                 break
 
     listener_task = asyncio.create_task(_input_listener())
+    listener_task.add_done_callback(
+        lambda t: _log.debug("입력 리스너 종료: %s", t.exception()) if not t.cancelled() and t.exception() else None
+    )
+    cycle_count = 0
 
     try:
         while not stop_event.is_set():
@@ -186,16 +199,43 @@ async def run_auto_mode(scraper, courses, details) -> None:
                     break
 
             console.print()
+            cycle_count += 1
             now_str = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
-            _log.info("스케줄 체크 시작")
+            _log.info("스케줄 체크 시작 (cycle %d)", cycle_count)
             console.print(f"  [bold cyan][{now_str}] 스케줄 체크 시작[/bold cyan]")
             console.print()
 
-            # 강의 목록 새로고침
-            try:
-                from src.ui.courses import _reload_details
+            # 브라우저 메모리 누적 방지: N사이클마다 재시작
+            if cycle_count > 1 and cycle_count % _BROWSER_RESTART_INTERVAL == 0:
+                _log.info("브라우저 주기적 재시작 (cycle %d)", cycle_count)
+                console.print("  [dim]브라우저 메모리 정리를 위해 재시작 중...[/dim]")
+                try:
+                    await scraper.close()
+                except Exception as close_e:
+                    _log.debug("브라우저 close 실패 (무시): %s", close_e)
+                for retry in range(3):
+                    try:
+                        await scraper.start()
+                        _log.info("브라우저 주기적 재시작 완료")
+                        console.print("  [dim]브라우저 재시작 완료[/dim]")
+                        break
+                    except Exception as restart_e:
+                        _log.error("브라우저 재시작 실패 (%d/3): %s", retry + 1, restart_e)
+                        if retry < 2:
+                            await asyncio.sleep(5)
+                        else:
+                            console.print(f"  [red]브라우저 재시작 3회 실패: {restart_e}[/red]")
+                            console.print("  [red]자동 모드를 종료합니다.[/red]")
+                            stop_event.set()
+                            break
+                if stop_event.is_set():
+                    break
 
+            # 강의 목록 새로고침 (이전 details 명시적 해제)
+            try:
+                old_details = details
                 details = await _reload_details(scraper, courses)
+                del old_details
             except Exception as e:
                 _log.error("강의 목록 갱신 실패: %s", e)
                 console.print(f"  [red]강의 목록 갱신 실패: {e}[/red]")
@@ -279,15 +319,32 @@ async def run_auto_mode(scraper, courses, details) -> None:
             # ── 다운로드 누락 점검 ────────────────────────────────────
             _check_download_gaps(courses, details)
 
+            # STT 모델 메모리 해제 (다음 사이클까지 필요 없음)
+            try:
+                from src.stt.transcriber import unload_model
+
+                unload_model()
+            except Exception as e:
+                _log.debug("STT 모델 해제 실패: %s", e)
+
             console.print()
             console.print("  [bold green]이번 스케줄 처리 완료.[/bold green]")
             console.print()
 
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        console.print("\n  [dim]자동 모드 중단...[/dim]")
     finally:
         listener_task.cancel()
         try:
             await listener_task
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, Exception):
+            pass
+        # STT 모델 메모리 최종 해제
+        try:
+            from src.stt.transcriber import unload_model
+
+            unload_model()
+        except Exception:
             pass
 
     console.print()
@@ -442,5 +499,5 @@ def _tg_error_notify(course, lec, error_msg: str) -> None:
         from src.notifier.telegram_notifier import notify_auto_error
 
         notify_auto_error(creds[0], creds[1], course.long_name, lec.week_label, lec.title, error_msg)
-    except Exception:
-        pass
+    except Exception as e:
+        _log.debug("텔레그램 오류 알림 실패: %s", e)

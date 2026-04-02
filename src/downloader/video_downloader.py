@@ -63,7 +63,8 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
     """
 
     captured: dict = {"url": None}
-    _bg_tasks: list = []
+    _bg_task: asyncio.Task | None = None
+    _content_parsed = False
 
     exclude_patterns = ("preloader.mp4", "preview.mp4", "thumbnail.mp4")
 
@@ -76,23 +77,24 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
             captured["url"] = url
 
     def _on_response(response):
+        nonlocal _bg_task, _content_parsed
         url = response.url
         if _is_valid_mp4(url) and captured["url"] is None:
             captured["url"] = url
-        # content.php 응답에서 미디어 URL 추출
-        if "content.php" in url and "commons.ssu.ac.kr" in url:
+        # content.php 응답에서 미디어 URL 추출 (최초 1회만 파싱)
+        if not _content_parsed and "content.php" in url and "commons.ssu.ac.kr" in url:
+            _content_parsed = True
 
             async def _parse_content_php():
                 try:
-                    import xml.etree.ElementTree as ET
+                    try:
+                        from defusedxml.ElementTree import fromstring as _safe_fromstring
+                    except ImportError:
+                        from xml.etree.ElementTree import fromstring as _safe_fromstring
 
                     body = await response.text()
-                    # XXE 방어: DTD/외부 엔티티 처리 비활성화
-                    parser = ET.XMLParser()
-                    parser.feed(body)
-                    root = parser.close()
-                    # desktop > html5 > media_uri (progressive) 우선
-                    # mobile > html5 > media_uri fallback
+                    root = _safe_fromstring(body)
+                    del body  # XML body 즉시 해제
                     media_uri = None
 
                     # 구조 A: content_playing_info > main_media > desktop/html5/media_uri
@@ -115,21 +117,20 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
                         if media_uri_el is not None and media_uri_el.text:
                             url_template = media_uri_el.text.strip()
                             if "[MEDIA_FILE]" in url_template:
-                                # main_media 텍스트에서 실제 파일명 추출
                                 main_media_el = root.find(".//story_list/story/main_media_list/main_media")
                                 if main_media_el is not None and main_media_el.text:
                                     media_uri = url_template.replace("[MEDIA_FILE]", main_media_el.text.strip())
                             elif "[" not in url_template:
                                 media_uri = url_template
+                    del root  # XML 트리 즉시 해제
 
                     if media_uri and captured["url"] is None:
                         captured["url"] = media_uri
                 except Exception as e:
                     _dl_log.debug("content.php 파싱 오류: %s", e)
 
-            task = asyncio.create_task(_parse_content_php())
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
-            _bg_tasks.append(task)
+            _bg_task = asyncio.create_task(_parse_content_php())
+            _bg_task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
 
     page.on("request", _on_request)
     page.on("response", _on_response)
@@ -251,11 +252,12 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
         page.remove_listener("request", _on_request)
         page.remove_listener("response", _on_response)
         # fire-and-forget 파싱 태스크 정리
-        for t in _bg_tasks:
-            if not t.done():
-                t.cancel()
-        if _bg_tasks:
-            await asyncio.gather(*_bg_tasks, return_exceptions=True)
+        if _bg_task is not None and not _bg_task.done():
+            _bg_task.cancel()
+            try:
+                await _bg_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 async def download_video_with_browser(

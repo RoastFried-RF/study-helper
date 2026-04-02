@@ -15,6 +15,7 @@ LMS가 수강 완료로 인식하도록 실제 재생 시간을 유지한다.
 import asyncio
 import json
 import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlparse
@@ -147,6 +148,7 @@ async def _ensure_playing(frame: Frame):
 async def _create_fake_webm(duration_sec: float) -> bytes:
     """VP8 WebM 더미 영상 생성 (Chromium H.264 미지원 우회).
 
+    TemporaryDirectory 사용 — context manager 종료 시 자동 삭제.
     2×2 픽셀 검정 프레임, 1fps, 극소 용량.
     Chromium headless는 H.264를 지원하지 않지만 VP8/WebM은 기본 지원한다.
     commonscdn MP4 요청을 이 영상으로 교체하면 Plan A(video DOM 폴링)가 동작한다.
@@ -229,6 +231,10 @@ async def _call_progress_jsonp(frame: Frame, report_url: str, callback: str) -> 
 
     실제 플레이어(uni-player.min.js)와 동일하게 commons.ssu.ac.kr origin에서
     canvas.ssu.ac.kr progress 엔드포인트를 호출함으로써 ErrAlreadyInView를 우회한다.
+
+    보안 참고: report_url은 LMS가 제공하는 TargetUrl에서 파생되므로 LMS 서버를
+    신뢰하는 구조. LMS 서버가 변조되면 임의 JS 실행 가능성이 있으나,
+    그 시점에서는 LMS 자체가 침해된 것이므로 여기서 방어할 범위를 벗어남.
     """
     result = await frame.evaluate(
         """
@@ -277,8 +283,6 @@ async def _report_completion(
     - commons_frame 있음 (Plan B): JSONP 방식으로 sl=0 세션에서 호출 (ErrAlreadyInView 우회).
     - 둘 다 없거나 실패 시: page.request.get으로 폴백.
     """
-    import time
-
     info = _parse_player_url(player_url)
     progress_url = info["progress_url"]
     if not progress_url:
@@ -567,8 +571,6 @@ async def _play_via_progress_api(
         # 30초마다 진도 API 호출
         if current >= next_report or current >= duration:
             try:
-                import time
-
                 ts = int(time.time() * 1000)
                 callback = f"jQuery111_{ts}"
 
@@ -714,6 +716,7 @@ async def play_lecture(
     # Chromium headless(ARM64 포함)는 H.264 미지원 → flashErrorPage.html 로드 → Plan A 실패
     # VP8 WebM을 대신 제공하면 Chromium이 정상 재생 → Plan A 동작 → LTI 세션 내에서 progress 보고
     _using_fake_video = False
+    _fake_video_bytes = None
     if fallback_duration > 0:
         log(f"[0] H.264 우회: VP8 더미 영상 생성 중 (duration={fallback_duration:.0f}s)...")
         try:
@@ -807,6 +810,7 @@ async def play_lecture(
         page.on("response", _on_response)
 
     async def _cleanup():
+        nonlocal _fake_video_bytes
         if _on_request:
             try:
                 page.remove_listener("request", _on_request)
@@ -822,6 +826,8 @@ async def play_lecture(
                 await page.unroute("**/*.mp4")
             except Exception:
                 pass
+        # 더미 영상 바이트 즉시 해제
+        _fake_video_bytes = None
 
     try:
         return await _play_lecture_inner(
@@ -961,8 +967,8 @@ async def _play_lecture_inner(
 
     # 6. video 요소 duration 대기
     log(f"[6] video 요소({_VIDEO_SEL}) duration 대기 (최대 {_PLAY_TIMEOUT}초)...")
-    deadline = asyncio.get_event_loop().time() + _PLAY_TIMEOUT
-    while asyncio.get_event_loop().time() < deadline:
+    deadline = asyncio.get_running_loop().time() + _PLAY_TIMEOUT
+    while asyncio.get_running_loop().time() < deadline:
         info = await _get_video_state(frame)
         if debug:
             log(f"    poll: info={info}")
@@ -1110,7 +1116,7 @@ async def _play_lecture_inner(
     # 7. 재생 완료까지 폴링
     log("[7] 재생 루프 시작")
     _AFTER_UPDATE_INTERVAL = 30.0  # afterTimeUpdate 수동 호출 주기 (초)
-    _last_after_update = asyncio.get_event_loop().time() - _AFTER_UPDATE_INTERVAL  # 즉시 첫 호출
+    _last_after_update = asyncio.get_running_loop().time() - _AFTER_UPDATE_INTERVAL  # 즉시 첫 호출
     while True:
         info = await _get_video_state(frame)
         if info is None:
@@ -1148,7 +1154,7 @@ async def _play_lecture_inner(
         # afterTimeUpdate는 commons frame 내에서 sl=1 세션 컨텍스트로 실행되므로
         # 직접 진도 API를 호출해도 ErrAlreadyInView가 발생하지 않는다.
         if _using_fake_video:
-            now = asyncio.get_event_loop().time()
+            now = asyncio.get_running_loop().time()
             if now - _last_after_update >= _AFTER_UPDATE_INTERVAL:
                 # ── 진도 API를 page 컨텍스트(canvas.ssu.ac.kr, 동일 오리진)에서 fetch ──
                 # frame 컨텍스트(commons.ssu.ac.kr)에서 script 태그로 호출하면
