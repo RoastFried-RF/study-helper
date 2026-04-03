@@ -87,10 +87,7 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
 
             async def _parse_content_php():
                 try:
-                    try:
-                        from defusedxml.ElementTree import fromstring as _safe_fromstring
-                    except ImportError:
-                        from xml.etree.ElementTree import fromstring as _safe_fromstring
+                    from defusedxml.ElementTree import fromstring as _safe_fromstring
 
                     body = await response.text()
                     root = _safe_fromstring(body)

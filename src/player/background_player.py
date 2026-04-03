@@ -215,6 +215,13 @@ def _parse_player_url(player_url: str) -> dict:
     duration = float(qs.get("endat", ["0"])[0])
     target_url = unquote(qs.get("TargetUrl", [""])[0])
 
+    # progress_url 호스트 검증 — LMS 서버 외 URL 차단 (SSRF 방지)
+    _ALLOWED_HOSTS = {"canvas.ssu.ac.kr", "commons.ssu.ac.kr"}
+    if target_url:
+        _parsed_host = urlparse(target_url).hostname
+        if _parsed_host and _parsed_host not in _ALLOWED_HOSTS:
+            target_url = ""
+
     # content_id는 path의 마지막 세그먼트
     content_id = parsed.path.rstrip("/").split("/")[-1]
 

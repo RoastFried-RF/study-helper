@@ -47,16 +47,13 @@ def _parse_duration(duration_str: str | None) -> float:
 
 def _tg_playback_error(lec: LectureItem, failed: bool = True) -> None:
     """재생 실패/미완료 시 텔레그램 알림을 전송한다 (설정된 경우에만)."""
-    if Config.TELEGRAM_ENABLED != "true":
-        return
-    token = Config.TELEGRAM_BOT_TOKEN
-    chat_id = Config.TELEGRAM_CHAT_ID
-    if not token or not chat_id:
+    creds = Config.get_telegram_credentials()
+    if not creds:
         return
     try:
         from src.notifier.telegram_notifier import notify_playback_error
 
-        notify_playback_error(token, chat_id, "", lec.week_label, lec.title, failed=failed)
+        notify_playback_error(creds[0], creds[1], "", lec.week_label, lec.title, failed=failed)
     except Exception:
         pass
 

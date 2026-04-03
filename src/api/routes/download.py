@@ -6,10 +6,11 @@ import asyncio
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from src.config import Config
+from src.logger import get_logger
 from src.service.download_pipeline import (
     PipelineProgress,
     convert_to_audio,
@@ -18,6 +19,11 @@ from src.service.download_pipeline import (
     summarize_text,
     transcribe_audio,
 )
+
+_log = get_logger("api.download")
+
+_ALLOWED_WHISPER_MODELS = {"tiny", "base", "small", "medium", "large"}
+_ALLOWED_AI_AGENTS = {"gemini", "openai"}
 
 router = APIRouter()
 
@@ -88,6 +94,8 @@ def convert(body: ConvertRequest):
 @router.post("/transcribe")
 async def transcribe(body: TranscribeRequest):
     """음성을 텍스트로 변환한다 (STT)."""
+    if body.model_size not in _ALLOWED_WHISPER_MODELS:
+        raise HTTPException(status_code=400, detail=f"허용되지 않는 모델: {body.model_size}")
     audio = _validate_path_in_download_dir(body.audio_path)
     loop = asyncio.get_running_loop()
     try:
@@ -109,6 +117,8 @@ async def transcribe(body: TranscribeRequest):
 @router.post("/summarize")
 async def summarize(body: SummarizeRequest):
     """텍스트를 AI로 요약한다."""
+    if body.agent not in _ALLOWED_AI_AGENTS:
+        raise HTTPException(status_code=400, detail=f"허용되지 않는 AI 에이전트: {body.agent}")
     txt = _validate_path_in_download_dir(body.txt_path)
     loop = asyncio.get_running_loop()
     summary_path = await loop.run_in_executor(
@@ -144,6 +154,7 @@ async def pipeline_ws(ws: WebSocket):
 
         data = await ws.receive_json()
         req = PipelineRequest(**data)
+        _validate_path_in_download_dir(req.mp4_path)
 
         async def _on_progress(p: PipelineProgress):
             await ws.send_json(
@@ -195,7 +206,8 @@ async def pipeline_ws(ws: WebSocket):
         await ws.close()
     except WebSocketDisconnect:
         pass
-    except Exception:
+    except Exception as e:
+        _log.error("Pipeline WebSocket 오류: %s", e, exc_info=True)
         try:
             await ws.send_json({"type": "error", "message": "파이프라인 실행 중 오류가 발생했습니다"})
             await ws.close()

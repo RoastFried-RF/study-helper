@@ -228,7 +228,6 @@ class Config:
                 new_lines.append(f"{key}={value}\n")
 
         # atomic write: 임시 파일에 먼저 쓴 뒤 rename으로 대체 (쓰기 중 크래시 시 원본 보존)
-        import os
         import tempfile
 
         fd, tmp_str = tempfile.mkstemp(dir=env_path.parent, prefix=".env.", suffix=".tmp")

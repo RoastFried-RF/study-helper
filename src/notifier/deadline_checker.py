@@ -8,12 +8,14 @@
 import hashlib
 import json
 import re
-import sys
 from dataclasses import dataclass
 from datetime import datetime
 
 from src.config import KST, get_data_path
+from src.logger import get_logger
 from src.scraper.models import VIDEO_LECTURE_TYPES, Course, CourseDetail, LectureItem, LectureType
+
+_log = get_logger("deadline_checker")
 
 _DEADLINE_FILE = get_data_path("deadline_notified.json")
 
@@ -93,7 +95,7 @@ def _load_notified() -> set[str]:
         if _DEADLINE_FILE.exists():
             return set(json.loads(_DEADLINE_FILE.read_text(encoding="utf-8")))
     except json.JSONDecodeError:
-        print("  [경고] deadline_notified.json 파싱 실패 — 초기화합니다.", file=sys.stderr)
+        _log.warning("deadline_notified.json 파싱 실패 — 초기화합니다.")
     except Exception:
         pass
     return set()
@@ -106,7 +108,7 @@ def _save_notified(notified: set[str]) -> None:
         tmp_path.write_text(json.dumps(sorted(notified)), encoding="utf-8")
         tmp_path.replace(_DEADLINE_FILE)
     except Exception as e:
-        print(f"  [경고] deadline_notified.json 저장 실패: {e}", file=sys.stderr)
+        _log.warning("deadline_notified.json 저장 실패: %s", e)
 
 
 def find_approaching_deadlines(

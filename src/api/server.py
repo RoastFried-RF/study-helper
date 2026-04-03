@@ -44,7 +44,7 @@ app = FastAPI(
 # CORS — localhost만 허용
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # localhost 전용 서버이므로 모든 origin 허용
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
