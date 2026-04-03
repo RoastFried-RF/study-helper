@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -197,18 +198,20 @@ async def run_pipeline(
     """
     result = PipelineResult(success=True, mp4_path=mp4_path)
 
-    def _emit(stage: PipelineStage, progress: float = 0.0, msg: str = ""):
+    async def _emit(stage: PipelineStage, progress: float = 0.0, msg: str = ""):
         if on_progress:
-            on_progress(PipelineProgress(stage=stage, progress=progress, message=msg))
+            ret = on_progress(PipelineProgress(stage=stage, progress=progress, message=msg))
+            if inspect.isawaitable(ret):
+                await ret
 
     # ── 1. mp3 변환 ──────────────────────────────────────────────
     if audio_only or both:
-        _emit(PipelineStage.CONVERT, 0.0, "mp3 변환 중...")
+        await _emit(PipelineStage.CONVERT, 0.0, "mp3 변환 중...")
         try:
             result.mp3_path = convert_to_audio(mp4_path, delete_original=audio_only)
             if audio_only:
                 result.mp4_path = None
-            _emit(PipelineStage.CONVERT, 1.0, "mp3 변환 완료")
+            await _emit(PipelineStage.CONVERT, 1.0, "mp3 변환 완료")
         except Exception as e:
             result.stage_errors["convert"] = str(e)
             result.success = False
@@ -217,14 +220,14 @@ async def run_pipeline(
 
     # ── 2. STT ───────────────────────────────────────────────────
     if result.mp3_path and stt_enabled:
-        _emit(PipelineStage.TRANSCRIBE, 0.0, "STT 변환 중...")
+        await _emit(PipelineStage.TRANSCRIBE, 0.0, "STT 변환 중...")
         try:
             loop = asyncio.get_running_loop()
             result.txt_path = await loop.run_in_executor(
                 None,
                 lambda: transcribe_audio(result.mp3_path, model_size=stt_model, language=stt_language),
             )
-            _emit(PipelineStage.TRANSCRIBE, 1.0, "STT 완료")
+            await _emit(PipelineStage.TRANSCRIBE, 1.0, "STT 완료")
         except Exception as e:
             result.stage_errors["transcribe"] = str(e)
         finally:
@@ -238,7 +241,7 @@ async def run_pipeline(
 
     # ── 3. AI 요약 ───────────────────────────────────────────────
     if result.txt_path and ai_enabled and ai_api_key:
-        _emit(PipelineStage.SUMMARIZE, 0.0, "AI 요약 중...")
+        await _emit(PipelineStage.SUMMARIZE, 0.0, "AI 요약 중...")
         try:
             loop = asyncio.get_running_loop()
             result.summary_path = await loop.run_in_executor(
@@ -251,13 +254,13 @@ async def run_pipeline(
                     extra_prompt=ai_extra_prompt,
                 ),
             )
-            _emit(PipelineStage.SUMMARIZE, 1.0, "AI 요약 완료")
+            await _emit(PipelineStage.SUMMARIZE, 1.0, "AI 요약 완료")
         except Exception as e:
             result.stage_errors["summarize"] = str(e)
 
     # ── 4. 텔레그램 알림 ─────────────────────────────────────────
     if result.summary_path and tg_token and tg_chat_id:
-        _emit(PipelineStage.NOTIFY, 0.0, "텔레그램 전송 중...")
+        await _emit(PipelineStage.NOTIFY, 0.0, "텔레그램 전송 중...")
         files_to_delete = None
         if tg_auto_delete:
             files_to_delete = [f for f in [result.mp4_path, result.mp3_path, result.txt_path, result.summary_path] if f]
@@ -271,7 +274,7 @@ async def run_pipeline(
                 summary_path=result.summary_path,
                 auto_delete_files=files_to_delete,
             )
-            _emit(PipelineStage.NOTIFY, 1.0, "전송 완료" if ok else "전송 실패")
+            await _emit(PipelineStage.NOTIFY, 1.0, "전송 완료" if ok else "전송 실패")
             if not ok:
                 result.stage_errors["notify"] = "텔레그램 전송 실패"
         except Exception as e:

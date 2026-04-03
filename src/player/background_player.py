@@ -367,11 +367,13 @@ async def _report_completion(
                 report_url_fb,
                 headers={"Referer": "https://commons.ssu.ac.kr/"},
             )
-            body = await response.text()
-            await response.dispose()
-            log(f"  [완료 보고] request.get 응답: {response.status}  body={body[:200]!r}")
-            if '"result":true' in body:
-                return
+            try:
+                body = await response.text()
+                log(f"  [완료 보고] request.get 응답: {response.status}  body={body[:200]!r}")
+                if '"result":true' in body:
+                    return
+            finally:
+                await response.dispose()
         except Exception as e:
             log(f"  [완료 보고] request.get 실패: {e}")
 
@@ -607,17 +609,21 @@ async def _play_via_progress_api(
                             report_target,
                             headers={"Referer": "https://commons.ssu.ac.kr/"},
                         )
-                        body = await response.text()
-                        await response.dispose()
-                        log(f"  [API] 응답 (fallback): {response.status}  body={body[:200]!r}")
+                        try:
+                            body = await response.text()
+                            log(f"  [API] 응답 (fallback): {response.status}  body={body[:200]!r}")
+                        finally:
+                            await response.dispose()
                 else:
                     response = await page.request.get(
                         report_target,
                         headers={"Referer": "https://commons.ssu.ac.kr/"},
                     )
-                    body = await response.text()
-                    await response.dispose()
-                    log(f"  [API] 응답: {response.status}  body={body[:200]!r}")
+                    try:
+                        body = await response.text()
+                        log(f"  [API] 응답: {response.status}  body={body[:200]!r}")
+                    finally:
+                        await response.dispose()
                 next_report = current + report_interval
             except Exception as e:
                 log(f"  [API] 진도 보고 실패: {e} — 다음 폴링에서 재시도")

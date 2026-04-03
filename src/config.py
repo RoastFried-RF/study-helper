@@ -227,5 +227,9 @@ class Config:
             if key not in updated_keys:
                 new_lines.append(f"{key}={value}\n")
 
-        with open(env_path, "w", encoding="utf-8") as f:
+        # atomic write: 임시 파일에 먼저 쓴 뒤 rename으로 대체 (쓰기 중 크래시 시 원본 보존)
+        tmp_path = env_path.with_suffix(".env.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.writelines(new_lines)
+            f.flush()
+        tmp_path.replace(env_path)
