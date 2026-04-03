@@ -42,6 +42,8 @@ def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
 
 def _send_document(bot_token: str, chat_id: str, file_path: Path, caption: str = "") -> bool:
     """텔레그램 파일을 전송한다. 응답 body의 ok 필드로 성공 여부를 판정한다."""
+    if not _BOT_TOKEN_RE.match(bot_token):
+        return False
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     try:
         with open(file_path, "rb") as f:
@@ -254,17 +256,20 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
             f"https://api.telegram.org/bot{bot_token}/getMe",
             timeout=10,
         )
-        if not resp.ok:
-            try:
-                data = resp.json()
-                desc = data.get("description", resp.text)
-            except ValueError:
-                desc = resp.text
-            return False, f"봇 토큰 오류: {desc}"
         try:
-            bot_name = resp.json().get("result", {}).get("username", "")
-        except ValueError:
-            return False, "봇 응답 파싱 실패"
+            if not resp.ok:
+                try:
+                    data = resp.json()
+                    desc = data.get("description", resp.text)
+                except ValueError:
+                    desc = resp.text
+                return False, f"봇 토큰 오류: {desc}"
+            try:
+                bot_name = resp.json().get("result", {}).get("username", "")
+            except ValueError:
+                return False, "봇 응답 파싱 실패"
+        finally:
+            resp.close()
     except Exception as e:
         return False, f"네트워크 오류: {e}"
 

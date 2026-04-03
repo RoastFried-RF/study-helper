@@ -47,7 +47,8 @@ def convert_to_mp3(mp4_path: Path, mp3_path: Path | None = None) -> Path:
     try:
         result = subprocess.run(
             cmd,
-            capture_output=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
         )
     except FileNotFoundError:

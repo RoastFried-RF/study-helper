@@ -138,14 +138,19 @@ class CourseScraper:
     async def start(self):
         self._pw = await async_playwright().start()
         self._page, self._browser = await self._setup_browser()
-        self._log("LMS 접속 중...")
-        await self._page.goto(_DASHBOARD_URL, wait_until="networkidle")
-        if "login" in self._page.url:
-            self._log("로그인 진행 중...")
-            ok = await ensure_logged_in(self._page, self.username, self.password)
-            if not ok:
-                raise RuntimeError("로그인 실패. 학번/비밀번호를 확인하세요.")
-            self._log("로그인 완료")
+        try:
+            self._log("LMS 접속 중...")
+            await self._page.goto(_DASHBOARD_URL, wait_until="networkidle")
+            if "login" in self._page.url:
+                self._log("로그인 진행 중...")
+                ok = await ensure_logged_in(self._page, self.username, self.password)
+                if not ok:
+                    raise RuntimeError("로그인 실패. 학번/비밀번호를 확인하세요.")
+                self._log("로그인 완료")
+        except Exception:
+            # _setup_browser 성공 후 goto/로그인 실패 시 리소스 정리하여 고아 방지
+            await self.close()
+            raise
 
     async def close(self):
         try:
@@ -254,8 +259,7 @@ class CourseScraper:
                     except Exception as e:
                         if attempt < max_retries:
                             self._log(
-                                f"강의 로딩 실패 ({course.long_name}), "
-                                f"재시도 {attempt + 1}/{max_retries}: {e}",
+                                f"강의 로딩 실패 ({course.long_name}), 재시도 {attempt + 1}/{max_retries}: {e}",
                                 "warning",
                             )
                             await asyncio.sleep(1)

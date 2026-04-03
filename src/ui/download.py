@@ -7,7 +7,6 @@
 
 import asyncio
 from pathlib import Path
-from urllib.parse import urlparse
 
 from rich.console import Console
 from rich.live import Live
@@ -25,6 +24,7 @@ from rich.text import Text
 
 from src.config import Config
 from src.logger import get_error_logger
+from src.ui.player import _safe_url
 
 _MAX_URL_RETRIES = 3
 _RETRY_WAIT = 10  # seconds
@@ -93,7 +93,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print("  [bold red]오류:[/bold red] 영상 URL을 찾지 못했습니다. (3회 시도)")
         logger, log_path = get_error_logger("download")
         logger.info("강의: %s", lec.title)
-        logger.info("URL: %s", urlparse(lec.full_url)._replace(query="", fragment="").geturl())
+        logger.info("URL: %s", _safe_url(lec.full_url))
         logger.info("오류: 영상 URL 추출 실패 (3회 재시도 후에도 실패)")
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
@@ -141,7 +141,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print(f"  [bold red]다운로드 실패:[/bold red] {e}")
         logger, log_path = get_error_logger("download")
         logger.info("강의: %s", lec.title)
-        logger.info("URL: %s", urlparse(lec.full_url)._replace(query="", fragment="").geturl())
+        logger.info("URL: %s", _safe_url(lec.full_url))
         logger.info("영상 URL: %s", video_url)
         logger.error("다운로드 실패: %s", e, exc_info=True)
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
@@ -179,7 +179,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print()
         console.print("  [dim]STT 변환 중... (시간이 걸릴 수 있습니다)[/dim]")
         try:
-            from src.stt.transcriber import transcribe
+            from src.stt.transcriber import transcribe, unload_model
 
             txt_path = transcribe(
                 mp3_path,
@@ -190,6 +190,11 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
             console.print(f"  [dim]{txt_path}[/dim]")
         except Exception as e:
             console.print(f"  [bold red]STT 실패:[/bold red] {e}")
+        finally:
+            try:
+                unload_model()
+            except Exception:
+                pass
 
     # 7. AI 요약 (txt가 있고 AI_ENABLED=true인 경우)
     summary_path = None

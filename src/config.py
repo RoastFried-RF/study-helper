@@ -46,10 +46,11 @@ def _read_version() -> str:
 
     changelog = Path(__file__).parent.parent / "CHANGELOG.md"
     try:
-        for line in changelog.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^## \[v(.+?)\]", line)
-            if m:
-                return m.group(1)
+        with open(changelog, encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"^## \[v(.+?)\]", line)
+                if m:
+                    return m.group(1)
     except Exception:
         pass
     return "unknown"

@@ -18,7 +18,6 @@ from src.ui.login import (
     show_login_success,
 )
 from src.ui.player import run_player
-from src.ui.settings import run_settings
 from src.updater import check_update
 
 console = Console()
@@ -75,6 +74,8 @@ async def run():
 
     # ── 2. 최초 설정 (설정이 없으면 진행) ────────────────────────
     if not Config.has_settings():
+        from src.ui.settings import run_settings
+
         run_settings()
 
     # ── 3. 과목 목록 로드 + 버전 체크 (병렬) ─────────────────────

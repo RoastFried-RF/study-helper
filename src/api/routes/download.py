@@ -182,10 +182,12 @@ async def pipeline_ws(ws: WebSocket):
                 "stage_errors": result.stage_errors,
             }
         )
+        await ws.close()
     except WebSocketDisconnect:
         pass
-    except Exception as e:
+    except Exception:
         try:
-            await ws.send_json({"type": "error", "message": str(e)})
+            await ws.send_json({"type": "error", "message": "파이프라인 실행 중 오류가 발생했습니다"})
+            await ws.close()
         except Exception:
             pass

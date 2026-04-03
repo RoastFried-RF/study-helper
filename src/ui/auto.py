@@ -231,11 +231,9 @@ async def run_auto_mode(scraper, courses, details) -> None:
                 if stop_event.is_set():
                     break
 
-            # 강의 목록 새로고침 (이전 details 명시적 해제)
+            # 강의 목록 새로고침
             try:
-                old_details = details
                 details = await _reload_details(scraper, courses)
-                del old_details
             except Exception as e:
                 _log.error("강의 목록 갱신 실패: %s", e)
                 console.print(f"  [red]강의 목록 갱신 실패: {e}[/red]")
@@ -252,6 +250,11 @@ async def run_auto_mode(scraper, courses, details) -> None:
                     except Exception as restart_e:
                         _log.error("브라우저 재시작 실패: %s", restart_e)
                         console.print(f"  [red]브라우저 재시작 실패: {restart_e}[/red]")
+                        # start() 실패 시 부분 생성된 리소스 정리
+                        try:
+                            await scraper.close()
+                        except Exception:
+                            pass
 
                 await asyncio.sleep(60)
                 continue
@@ -285,13 +288,25 @@ async def run_auto_mode(scraper, courses, details) -> None:
             stale = completed & still_incomplete
             if stale:
                 completed -= stale
+
+            # 현재 LMS에 존재하는 URL만 유지 — 수강 종료/삭제된 항목 정리 (무한 성장 방지)
+            all_urls = {
+                lec.full_url
+                for _, detail in zip(courses, details, strict=False)
+                if detail
+                for lec in detail.all_video_lectures
+            }
+            orphan = completed - all_urls
+            if orphan:
+                completed -= orphan
+
+            if stale or orphan:
                 _save_progress(completed)
+            if stale:
                 console.print(f"  [dim]이전 처리 후 미완료 {len(stale)}건 재시도 대상[/dim]")
 
             # progress에 없는 (아직 미처리) 강의만 대상
-            pending_list = [
-                (c, lec) for c, lec in all_needs_watch if lec.full_url not in completed
-            ]
+            pending_list = [(c, lec) for c, lec in all_needs_watch if lec.full_url not in completed]
 
             stats_msg = (
                 f"전체 비디오 {total_videos}개 / 미시청 {len(all_needs_watch)}개 "

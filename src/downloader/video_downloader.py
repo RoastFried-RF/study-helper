@@ -276,8 +276,12 @@ async def download_video_with_browser(
 
     referer = "https://commons.ssu.ac.kr/"
     # 재시도 가능한 오류: 네트워크 불안정, 청크 인코딩 오류 등
-    _RETRYABLE = (IncompleteRead, requests.exceptions.ChunkedEncodingError,
-                  requests.exceptions.ConnectionError, requests.exceptions.Timeout)
+    _RETRYABLE = (
+        IncompleteRead,
+        requests.exceptions.ChunkedEncodingError,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+    )
     last_error: Exception | None = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:

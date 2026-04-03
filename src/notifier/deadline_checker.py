@@ -200,6 +200,21 @@ def check_and_notify_deadlines(
     from src.notifier.telegram_notifier import notify_deadline_warning
 
     notified = _load_notified()
+
+    # 만료 키 정리: 현재 유효한 강의의 dedup 키만 유지하여 무한 성장 방지
+    valid_keys: set[str] = set()
+    for course, detail in zip(courses, details, strict=False):
+        if detail is None:
+            continue
+        for week in detail.weeks:
+            for lec in week.lectures:
+                for threshold in _THRESHOLDS:
+                    valid_keys.add(_make_dedup_key(course, lec, threshold))
+    stale_keys = notified - valid_keys
+    if stale_keys:
+        notified -= stale_keys
+        _save_notified(notified)
+
     items = find_approaching_deadlines(courses, details, notified=notified)
 
     if not items:

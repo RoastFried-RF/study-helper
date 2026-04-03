@@ -5,6 +5,7 @@ STT로 생성된 .txt 파일을 Gemini 또는 OpenAI API로 요약한다.
 결과는 동일 경로에 _summarized.txt로 저장된다.
 """
 
+import gc
 from pathlib import Path
 
 _SUMMARY_PROMPT = """\
@@ -115,6 +116,7 @@ def _summarize_gemini(api_key: str, model: str, prompt: str) -> str:
         return response.text
     finally:
         del client  # google-genai SDK에 close() 없음 — 참조 해제로 대체
+        gc.collect()  # 내부 httpx 커넥션 풀 즉시 수거
 
 
 def _summarize_openai(api_key: str, model: str, prompt: str) -> str:

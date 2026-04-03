@@ -243,17 +243,20 @@ async def _call_progress_jsonp(frame: Frame, report_url: str, callback: str) -> 
             var cbName = args[1];
             window[cbName] = function(data) {
                 delete window[cbName];
+                if (s && s.parentNode) s.parentNode.removeChild(s);
                 resolve(JSON.stringify(data));
             };
             var s = document.createElement('script');
             s.src = url;
             s.onerror = function() {
                 delete window[cbName];
+                if (s && s.parentNode) s.parentNode.removeChild(s);
                 resolve(JSON.stringify({error: 'script_error'}));
             };
             document.head.appendChild(s);
             setTimeout(function() {
                 delete window[cbName];
+                if (s && s.parentNode) s.parentNode.removeChild(s);
                 resolve(JSON.stringify({error: 'timeout'}));
             }, 10000);
         })
@@ -789,22 +792,19 @@ async def play_lecture(
             if "google-analytics" in url or "gtm" in url:
                 return
             if "commons.ssu.ac.kr" in url or "learningx" in url:
-                try:
-                    body = await response.text()
-                except Exception:
-                    body = "(읽기 실패)"
-                headers = dict(response.headers)
-                set_cookie = headers.get("set-cookie", "")
                 log(f"  [SNIFF←RES] {response.status} {url}")
-                if set_cookie:
-                    log(f"  [SNIFF←RES] set-cookie={set_cookie}")
-                # 중요 API는 전체 body 출력, 나머지는 500자 제한
-                # 4xx 응답에서 body가 비어있어도 명시적으로 로깅 (원인 진단용)
-                if response.status >= 400 and any(kw in url for kw in _FULL_BODY_KEYWORDS):
-                    log(f"  [SNIFF←RES] body(4xx)={body!r}")
-                elif body:
-                    if any(kw in url for kw in _FULL_BODY_KEYWORDS) or len(body) < 500:
+                # body는 중요 API 또는 4xx 에러만 선별적으로 읽어 메모리 절약
+                is_important = any(kw in url for kw in _FULL_BODY_KEYWORDS)
+                if is_important or response.status >= 400:
+                    try:
+                        body = await response.text()
+                    except Exception:
+                        body = "(읽기 실패)"
+                    if response.status >= 400:
+                        log(f"  [SNIFF←RES] body(4xx)={body!r}")
+                    elif body:
                         log(f"  [SNIFF←RES] body={body!r}")
+                    del body
 
         page.on("request", _on_request)
         page.on("response", _on_response)
@@ -908,9 +908,7 @@ async def _play_lecture_inner(
                     retry_frame = await find_player_frame(page)
                     if retry_frame:
                         log(f"    → commons frame 발견: {retry_frame.url}")
-                        return await _play_via_progress_api(
-                            page, retry_frame.url, on_progress, log, fallback_duration
-                        )
+                        return await _play_via_progress_api(page, retry_frame.url, on_progress, log, fallback_duration)
                 except Exception as retry_e:
                     log(f"    → 재로드 후 재탐색 실패: {retry_e}")
             return lx_state
@@ -984,9 +982,7 @@ async def _play_lecture_inner(
         plan_b_url = frame.url if frame and "commons.ssu.ac.kr" in frame.url else player_url_snapshot
         log(f"[6] 영상 로드 실패 → Plan B(진도 API) 전환 시도 (url={plan_b_url[:80]}...)")
         try:
-            return await _play_via_progress_api(
-                page, plan_b_url, on_progress, log, fallback_duration
-            )
+            return await _play_via_progress_api(page, plan_b_url, on_progress, log, fallback_duration)
         except Exception as plan_b_e:
             log(f"[6] Plan B 전환 실패: {plan_b_e}")
             state.error = "영상이 시작되지 않았습니다."
@@ -1035,7 +1031,7 @@ async def _play_lecture_inner(
                             '&totalpage=' + totalPage +
                             '&cumulativePage=' + cumPage +
                             '&_=' + ts;
-                        window[cbName] = function(d) {{ delete window[cbName]; }};
+                        window[cbName] = function(d) {{ delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); }};
                         var s = document.createElement('script');
                         s.src = url;
                         document.head.appendChild(s);
