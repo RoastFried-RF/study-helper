@@ -50,6 +50,8 @@ def convert_to_mp3(mp4_path: Path, mp3_path: Path | None = None) -> Path:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError:
         raise FileNotFoundError("ffmpeg가 설치되어 있지 않습니다. ffmpeg를 먼저 설치해주세요.") from None

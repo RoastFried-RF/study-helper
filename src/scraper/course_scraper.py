@@ -257,16 +257,25 @@ class CourseScraper:
                         results[idx] = await self._fetch_lectures_on(page, course)
                         break
                     except Exception as e:
+                        err_type = type(e).__name__
                         if attempt < max_retries:
                             self._log(
-                                f"강의 로딩 실패 ({course.long_name}), 재시도 {attempt + 1}/{max_retries}: {e}",
+                                f"강의 로딩 실패 ({course.long_name}), "
+                                f"재시도 {attempt + 1}/{max_retries}: [{err_type}] {e}",
                                 "warning",
+                            )
+                            # URL은 파일 로그에만 기록 (UI 콜백에 내부 URL 노출 방지)
+                            self._file_log.warning(
+                                "강의 로딩 실패 상세 — url=%s", course.lectures_url,
                             )
                             await asyncio.sleep(1)
                         else:
                             self._log(
-                                f"강의 로딩 실패 ({course.long_name}): {e}",
+                                f"강의 로딩 실패 ({course.long_name}): [{err_type}] {e}",
                                 "error",
+                            )
+                            self._file_log.error(
+                                "강의 로딩 실패 상세 — url=%s", course.lectures_url,
                             )
                             results[idx] = None
                     finally:

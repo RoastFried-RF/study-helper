@@ -433,7 +433,7 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
     console.print("  [dim]  → 재생 완료[/dim]")
 
     if stop_event.is_set():
-        return False
+        return True  # 재생은 성공했으므로 progress에 저장되도록 True 반환
 
     # ── 다운로드 ──────────────────────────────────────────────────
     rule = Config.DOWNLOAD_RULE or "both"
@@ -444,13 +444,14 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
         ok = await run_download(scraper.page, lec, course, audio_only=audio_only, both=both)
         if not ok:
             console.print(f"  [yellow]  → 다운로드 실패: {label}[/yellow]")
-            # run_download 내부에서 이미 텔레그램 알림 처리됨
-            return False
+            # 재생은 성공했으므로 progress에 저장 (다운로드 누락은 _check_download_gaps에서 감지)
+            return True
         console.print("  [dim]  → 다운로드 완료[/dim]")
     except Exception as e:
         console.print(f"  [red]  → 다운로드 실패: {e}[/red]")
         _tg_error_notify(course, lec, f"다운로드 실패: {e}")
-        return False
+        # 재생은 성공했으므로 progress에 저장
+        return True
 
     console.print(f"  [bold green]  → {label} 완료[/bold green]")
     console.print()
@@ -487,7 +488,7 @@ def _check_download_gaps(courses, details) -> None:
                 missing.append((course.long_name, lec.week_label, lec.title, "mp4"))
             elif rule == "audio" and not has_audio:
                 missing.append((course.long_name, lec.week_label, lec.title, "mp3"))
-            elif rule == "both" and not (has_video or has_audio):
+            elif rule == "both" and not (has_video and has_audio):
                 missing.append((course.long_name, lec.week_label, lec.title, "mp4+mp3"))
 
     if missing:

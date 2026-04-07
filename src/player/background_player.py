@@ -18,7 +18,7 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 from playwright.async_api import Frame, Page
 
@@ -32,6 +32,20 @@ _RESTART_BTN = ".confirm-cancel-btn"
 _DIALOG_SEL = ".confirm-msg-box"
 _PLAY_BTN = ".vc-front-screen-play-btn"
 _VIDEO_SEL = "video.vc-vplay-video1"
+
+# 호스트 허용 목록 — LMS/플레이어 서버 외 URL 차단 (SSRF 방지)
+_ALLOWED_PLAYER_HOSTS = {"canvas.ssu.ac.kr", "commons.ssu.ac.kr"}
+
+# body 읽기를 건너뛸 바이너리 Content-Type 접두사
+_BINARY_CT = ("image/", "video/", "audio/", "font/", "application/octet-stream")
+
+
+def _set_sl_param(url: str, value: str) -> str:
+    """URL의 sl 쿼리 파라미터를 안전하게 변경한다."""
+    p = urlparse(url)
+    qs = parse_qs(p.query, keep_blank_values=True)
+    qs["sl"] = [value]
+    return p._replace(query=urlencode(qs, doseq=True)).geturl()
 
 
 @dataclass
@@ -120,16 +134,19 @@ async def click_play(frame: Frame) -> bool:
 async def _get_video_state(frame: Frame) -> dict | None:
     """video 요소의 현재 상태(currentTime, duration, ended, paused)를 반환한다."""
     try:
-        return await frame.evaluate(f"""() => {{
-            const v = document.querySelector('{_VIDEO_SEL}');
-            if (!v) return null;
-            return {{
-                current: v.currentTime,
-                duration: v.duration || 0,
-                ended: v.ended,
-                paused: v.paused
-            }};
-        }}""")
+        return await frame.evaluate(
+            """(sel) => {
+                const v = document.querySelector(sel);
+                if (!v) return null;
+                return {
+                    current: v.currentTime,
+                    duration: v.duration || 0,
+                    ended: v.ended,
+                    paused: v.paused
+                };
+            }""",
+            _VIDEO_SEL,
+        )
     except Exception:
         return None
 
@@ -137,10 +154,13 @@ async def _get_video_state(frame: Frame) -> dict | None:
 async def _ensure_playing(frame: Frame):
     """일시정지 상태면 JS로 강제 재생한다."""
     try:
-        await frame.evaluate(f"""() => {{
-            const v = document.querySelector('{_VIDEO_SEL}');
-            if (v && v.paused && !v.ended) v.play();
-        }}""")
+        await frame.evaluate(
+            """(sel) => {
+                const v = document.querySelector(sel);
+                if (v && v.paused && !v.ended) v.play();
+            }""",
+            _VIDEO_SEL,
+        )
     except Exception:
         pass
 
@@ -216,10 +236,9 @@ def _parse_player_url(player_url: str) -> dict:
     target_url = unquote(qs.get("TargetUrl", [""])[0])
 
     # progress_url 호스트 검증 — LMS 서버 외 URL 차단 (SSRF 방지)
-    _ALLOWED_HOSTS = {"canvas.ssu.ac.kr", "commons.ssu.ac.kr"}
     if target_url:
         _parsed_host = urlparse(target_url).hostname
-        if _parsed_host and _parsed_host not in _ALLOWED_HOSTS:
+        if _parsed_host and _parsed_host not in _ALLOWED_PLAYER_HOSTS:
             target_url = ""
 
     # content_id는 path의 마지막 세그먼트
@@ -393,6 +412,8 @@ async def _play_via_learningx_api(
     on_progress: Callable[[PlaybackState], None] | None,
     log: Callable[[str], None],
     fallback_duration: float = 0.0,
+    *,
+    learningx_frame: Frame | None = None,
 ) -> PlaybackState:
     """
     learningx 플레이어 전용 Plan B.
@@ -409,8 +430,6 @@ async def _play_via_learningx_api(
     state = PlaybackState()
 
     # URL에서 item_id, course_id 추출
-    # tool_content frame URL이 아닌 learningx API를 직접 호출해야 하므로
-    # page 컨텍스트(canvas.ssu.ac.kr)에서 fetch — 쿠키 자동 포함
     m = _re.search(r"/lecture_attendance/items/view/(\d+)", learningx_url)
     if not m:
         log(f"  [LX] item_id 파싱 실패: {learningx_url}")
@@ -430,15 +449,27 @@ async def _play_via_learningx_api(
     api_url = f"https://canvas.ssu.ac.kr/learningx/api/v1/courses/{course_id}/attendance_items/{item_id}"
     log(f"  [LX] learningx item API 호출: {api_url}")
 
+    # 세션 갱신 시 원래 강의 페이지로 복귀해야 LTI iframe도 갱신됨
+    lecture_page_url = page.url
+
+    # learningx iframe에서 CSRF 토큰 포함하여 fetch — 401 방지
+    # tool_content frame은 canvas.ssu.ac.kr/learningx 오리진으로,
+    # learningx API가 요구하는 X-CSRF-TOKEN을 <meta> 태그에서 추출할 수 있다.
+    fetch_frame = learningx_frame or page.frame(name="tool_content")
+
     # 401 등 일시적 세션 오류에 대비해 최대 3회 재시도
     body = ""
     status = -1
     for attempt in range(3):
         try:
-            result = await page.evaluate(f"""
+            target = fetch_frame if fetch_frame and not fetch_frame.is_detached() else page
+            result = await target.evaluate(f"""
                 async () => {{
                     try {{
-                        const resp = await fetch({json.dumps(api_url)});
+                        const meta = document.querySelector('meta[name="csrf-token"]');
+                        const headers = {{}};
+                        if (meta) headers['X-CSRF-TOKEN'] = meta.content;
+                        const resp = await fetch({json.dumps(api_url)}, {{ headers }});
                         return {{s: resp.status, b: await resp.text()}};
                     }} catch(e) {{
                         return {{s: -1, b: e.message}};
@@ -447,20 +478,23 @@ async def _play_via_learningx_api(
             """)
             status = result.get("s")
             body = result.get("b", "")
-            log(f"  [LX] API 응답: {status}")
+            log(f"  [LX] API 응답: {status} (frame={'iframe' if target is not page else 'main'})")
             if status == 200:
                 break
             if status in (401, 403) and attempt < 2:
                 log(f"  [LX] {status} 응답 — {attempt + 1}/3회 재시도 (3초 대기)")
                 await asyncio.sleep(3)
-                # 세션 갱신 시도: 대시보드 방문 후 다시 강의 페이지로 복귀
+                # 세션 갱신: 강의 페이지를 재로드하여 LTI iframe(learningx)도 갱신
                 try:
-                    await page.goto("https://canvas.ssu.ac.kr/", wait_until="domcontentloaded", timeout=15000)
-                    await asyncio.sleep(1)
-                    # course_id가 포함된 원래 강의 페이지로 복귀
-                    original_url = f"https://canvas.ssu.ac.kr/courses/{course_id}"
-                    await page.goto(original_url, wait_until="domcontentloaded", timeout=15000)
-                    await asyncio.sleep(1)
+                    await page.goto(lecture_page_url, wait_until="domcontentloaded", timeout=20000)
+                    await asyncio.sleep(2)
+                    # 재로드된 tool_content frame 재취득
+                    fetch_frame = page.frame(name="tool_content")
+                    if fetch_frame and not fetch_frame.is_detached():
+                        log(f"  [LX] 세션 갱신 완료 — iframe 재취득: {fetch_frame.url[:80]}")
+                    else:
+                        fetch_frame = None
+                        log("  [LX] 세션 갱신 후 tool_content frame 없음 — main frame으로 폴백")
                 except Exception as nav_e:
                     log(f"  [LX] 세션 갱신 중 오류: {nav_e}")
                 continue
@@ -470,7 +504,7 @@ async def _play_via_learningx_api(
                 await asyncio.sleep(3)
                 continue
             log(f"  [LX] API 호출 최종 실패: {e}")
-            state.error = f"learningx API 호출 실패: {e}"
+            state.error = "learningx API 호출 실패"
             return state
 
     if status != 200:
@@ -489,6 +523,13 @@ async def _play_via_learningx_api(
     if not viewer_url:
         log("  [LX] viewer_url 없음")
         state.error = "learningx viewer_url 없음"
+        return state
+
+    # viewer_url 호스트 검증 — SSRF 방지
+    _viewer_host = urlparse(viewer_url).hostname or ""
+    if _viewer_host not in _ALLOWED_PLAYER_HOSTS:
+        log(f"  [LX] viewer_url 호스트 불허: {_viewer_host!r}")
+        state.error = "viewer_url 호스트 검증 실패"
         return state
 
     duration = float(data.get("item_content_data", {}).get("duration", 0) or 0)
@@ -534,20 +575,15 @@ async def _play_via_progress_api(
         state.error = "진도 API URL을 파싱하지 못했습니다."
         return state
 
-    if duration <= 0:
-        if fallback_duration > 0:
-            log(f"  [API] endat 파라미터 없음 — LectureItem.duration 사용: {fallback_duration:.1f}s")
-            duration = fallback_duration
-        else:
-            log("  [API] duration 파싱 실패 — URL에 endat 파라미터 없음, fallback도 없음")
-            state.error = "영상 길이를 알 수 없습니다."
-            return state
+    if duration <= 0 and fallback_duration > 0:
+        log(f"  [API] endat 파라미터 없음 — LectureItem.duration 사용: {fallback_duration:.1f}s")
+        duration = fallback_duration
 
     # sl=1 세션 해제: player_url의 sl=1을 sl=0으로 교체해 commons를 재로드.
     # sl=1은 서버에 "현재 시청 중" 세션을 등록해 ErrAlreadyInView를 유발하므로,
     # sl=0으로 재방문하면 세션 충돌 없이 진도 API를 호출할 수 있다.
     # 재로드 후 그 commons 프레임 내부에서 JSONP로 progress를 보고한다.
-    sl0_url = player_url.replace("sl=1", "sl=0")
+    sl0_url = _set_sl_param(player_url, "0")
     commons_frame: Frame | None = None
     try:
         log(f"  [API] sl=0으로 commons 재로드: {sl0_url[:80]}...")
@@ -561,6 +597,25 @@ async def _play_via_progress_api(
         log(f"  [API] commons frame({'발견' if commons_frame else '없음'})")
     except Exception as e:
         log(f"  [API] commons 재로드 실패 ({e}) — page.request.get으로 폴백")
+
+    # duration이 아직 없으면 sl=0으로 로드된 commons frame에서 video.duration 조회
+    if duration <= 0 and commons_frame:
+        log("  [API] endat/fallback 없음 — video 엘리먼트에서 duration 조회 시도")
+        try:
+            vid_dur = await commons_frame.evaluate(
+                "() => { const v = document.querySelector('video'); "
+                "return (v && v.duration && isFinite(v.duration)) ? v.duration : 0; }"
+            )
+            if vid_dur and vid_dur > 0:
+                duration = float(vid_dur)
+                log(f"  [API] video.duration에서 추출 성공: {duration:.1f}s")
+        except Exception as e:
+            log(f"  [API] video.duration 조회 실패: {e}")
+
+    if duration <= 0:
+        log("  [API] duration 파싱 실패 — URL/fallback/video 모두 없음")
+        state.error = "영상 길이를 알 수 없습니다."
+        return state
 
     log("  [API] 진도 API 방식으로 재생 시뮬레이션")
     log(f"  [API] duration={duration:.1f}s  progress_url={progress_url}")
@@ -815,10 +870,22 @@ async def play_lecture(
                 # body는 중요 API 또는 4xx 에러만 선별적으로 읽어 메모리 절약
                 is_important = any(kw in url for kw in _FULL_BODY_KEYWORDS)
                 if is_important or response.status >= 400:
+                    # 바이너리 응답은 body 읽기 스킵 (읽기 실패 방지)
+                    try:
+                        ct = response.headers.get("content-type", "")
+                    except Exception:
+                        ct = ""
+                    if any(ct.startswith(prefix) for prefix in _BINARY_CT):
+                        try:
+                            await response.dispose()
+                        except Exception:
+                            pass
+                        return
                     try:
                         body = await response.text()
                     except Exception:
-                        body = "(읽기 실패)"
+                        # 스트림 소비 완료/연결 끊김 등 — 디버그 로그이므로 무시
+                        return
                     if response.status >= 400:
                         log(f"  [SNIFF←RES] body(4xx)={body!r}")
                     elif body:
@@ -917,7 +984,10 @@ async def _play_lecture_inner(
         tool_frame = page.frame(name="tool_content")
         if tool_frame and "learningx" in tool_frame.url:
             log(f"    → learningx 플레이어 감지: {tool_frame.url}")
-            lx_state = await _play_via_learningx_api(page, tool_frame.url, on_progress, log, fallback_duration)
+            lx_state = await _play_via_learningx_api(
+                page, tool_frame.url, on_progress, log, fallback_duration,
+                learningx_frame=tool_frame,
+            )
             # learningx API 실패 시 (401 등) 페이지 재로드 후 commons frame 재탐색
             if lx_state.error and not lx_state.ended:
                 log(f"    → learningx API 실패 ({lx_state.error}), 페이지 재로드 후 commons frame 재탐색...")
@@ -1013,26 +1083,27 @@ async def _play_lecture_inner(
     # video 요소에서 직접 읽도록 오버라이드하면 실제 재생 시간이 반영되어 진도 보고가 동작한다.
     if _using_fake_video:
         try:
-            await frame.evaluate(f"""() => {{
-                if (typeof GetCurrentTime !== 'undefined') {{
-                    GetCurrentTime = function() {{
-                        var v = document.querySelector('{_VIDEO_SEL}');
+            await frame.evaluate(
+                """(sel) => {
+                if (typeof GetCurrentTime !== 'undefined') {
+                    GetCurrentTime = function() {
+                        var v = document.querySelector(sel);
                         return v ? v.currentTime : 0;
-                    }};
-                }}
-                if (typeof GetTotalDuration !== 'undefined') {{
-                    GetTotalDuration = function() {{
-                        var v = document.querySelector('{_VIDEO_SEL}');
+                    };
+                }
+                if (typeof GetTotalDuration !== 'undefined') {
+                    GetTotalDuration = function() {
+                        var v = document.querySelector(sel);
                         return v ? v.duration : 0;
-                    }};
-                }}
+                    };
+                }
                 // sendPlayedTime 교체:
                 // 원본 함수는 GetCumulativePlayedPage() = 10000000000000 (apiManager 비정상값)을
                 // 그대로 URL에 포함 → 서버 400. 전역 접근 가능하므로 올바른 파라미터로 재구성한다.
-                if (typeof sendPlayedTime !== 'undefined') {{
-                    sendPlayedTime = function(stateVal) {{
+                if (typeof sendPlayedTime !== 'undefined') {
+                    sendPlayedTime = function(stateVal) {
                         if (typeof lms_url === 'undefined' || !lms_url) return;
-                        var v = document.querySelector('{_VIDEO_SEL}');
+                        var v = document.querySelector(sel);
                         if (!v) return;
                         var curTime = v.currentTime;
                         var totalPage = typeof GetTotalPage !== 'undefined' ? GetTotalPage() : 14;
@@ -1050,28 +1121,30 @@ async def _play_lecture_inner(
                             '&totalpage=' + totalPage +
                             '&cumulativePage=' + cumPage +
                             '&_=' + ts;
-                        window[cbName] = function(d) {{ delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); }};
+                        window[cbName] = function(d) { delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); };
                         var s = document.createElement('script');
                         s.src = url;
-                        s.onerror = function() {{ delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); }};
+                        s.onerror = function() { delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); };
                         document.head.appendChild(s);
-                        setTimeout(function() {{ if (window[cbName]) {{ delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); }} }}, 10000);
-                    }};
-                }}
+                        setTimeout(function() { if (window[cbName]) { delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); } }, 10000);
+                    };
+                }
                 // isPlayedContent: 플레이어가 "재생 시작" 이벤트로 설정하는 플래그.
                 // 가짜 WebM에서는 apiManager가 이 이벤트를 발생시키지 않으므로 강제로 true로 설정.
-                if (typeof isPlayedContent !== 'undefined') {{
+                if (typeof isPlayedContent !== 'undefined') {
                     isPlayedContent = true;
-                }}
+                }
                 // afterPlayStateChange: 재생 시작 이벤트 강제 전송.
                 // 서버가 START(play) 이벤트 수신 후에만 UPDATE 요청을 수락하는 경우 대비.
                 // 가짜 WebM에서는 apiManager가 play state change를 발생시키지 않으므로 수동 호출.
-                try {{
-                    if (typeof afterPlayStateChange === 'function') {{
+                try {
+                    if (typeof afterPlayStateChange === 'function') {
                         afterPlayStateChange('play');
-                    }}
-                }} catch(e) {{}}
-            }}""")
+                    }
+                } catch(e) {}
+            }""",
+                _VIDEO_SEL,
+            )
             log("[6.5] GetCurrentTime / GetTotalDuration 오버라이드 + isPlayedContent = true 설정 완료")
         except Exception as e:
             log(f"[6.5] 오버라이드 실패: {e}")
