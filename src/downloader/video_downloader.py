@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 import requests
 from playwright.async_api import Page
 
+from src.downloader.result import SSRFBlockedError
 from src.player.background_player import click_play, dismiss_dialog, find_player_frame
 
 _dl_log = logging.getLogger(__name__)
@@ -32,17 +33,40 @@ _POLL_INTERVAL_SEC = 0.5  # 폴링 간격 (초)
 
 # 다운로드 허용 도메인 (SSRF 방어)
 _ALLOWED_SCHEMES = {"https", "http"}
-_ALLOWED_HOSTS_SUFFIX = (".ssu.ac.kr", ".commonscdn.com", ".commonscdn.net")
+_DEFAULT_ALLOWED_HOSTS_SUFFIX = (".ssu.ac.kr", ".commonscdn.com", ".commonscdn.net")
+
+
+def _allowed_hosts_suffix() -> tuple[str, ...]:
+    """기본 허용 목록 + DOWNLOAD_EXTRA_HOSTS env 오버라이드를 합친 튜플.
+
+    env 값 예시: ".cdn.example.com,.media.foo.net" (쉼표 구분, 리딩 dot 권장).
+    알려지지 않은 새 CDN이 등장했을 때 재배포 없이 대응하기 위한 비상 출구.
+    """
+    import os
+
+    extra_raw = os.getenv("DOWNLOAD_EXTRA_HOSTS", "").strip()
+    if not extra_raw:
+        return _DEFAULT_ALLOWED_HOSTS_SUFFIX
+    extras: list[str] = []
+    for item in extra_raw.split(","):
+        host = item.strip()
+        if not host:
+            continue
+        if not host.startswith("."):
+            host = "." + host
+        extras.append(host)
+    return _DEFAULT_ALLOWED_HOSTS_SUFFIX + tuple(extras)
 
 
 def _validate_media_url(url: str) -> None:
-    """다운로드 URL의 프로토콜과 호스트를 검증한다. 허용 외 URL이면 ValueError."""
+    """다운로드 URL의 프로토콜과 호스트를 검증한다. 허용 외 URL이면 SSRFBlockedError."""
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_SCHEMES:
-        raise ValueError(f"허용되지 않는 프로토콜: {parsed.scheme}")
+        raise SSRFBlockedError(f"허용되지 않는 프로토콜: {parsed.scheme}")
     hostname = parsed.hostname or ""
-    if not any(hostname.endswith(suffix) for suffix in _ALLOWED_HOSTS_SUFFIX):
-        raise ValueError(f"허용되지 않는 호스트: {hostname}")
+    allowed = _allowed_hosts_suffix()
+    if not any(hostname.endswith(suffix) for suffix in allowed):
+        raise SSRFBlockedError(f"허용되지 않는 호스트: {hostname}")
 
 
 def _sanitize_filename(name: str) -> str:
@@ -65,20 +89,28 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
     captured: dict = {"url": None}
     _bg_task: asyncio.Task | None = None
     _content_parsed = False
+    _observed_hls = False  # m3u8/HLS URL 감지 시 실패 원인 분류에 사용
 
     exclude_patterns = ("preloader.mp4", "preview.mp4", "thumbnail.mp4")
 
     def _is_valid_mp4(url: str) -> bool:
         return ".mp4" in url and not any(p in url for p in exclude_patterns)
 
+    def _note_hls(url: str) -> None:
+        nonlocal _observed_hls
+        if not _observed_hls and (".m3u8" in url or "/hls/" in url):
+            _observed_hls = True
+
     def _on_request(request):
         url = request.url
+        _note_hls(url)
         if _is_valid_mp4(url) and captured["url"] is None:
             captured["url"] = url
 
     def _on_response(response):
         nonlocal _bg_task, _content_parsed
         url = response.url
+        _note_hls(url)
         if _is_valid_mp4(url) and captured["url"] is None:
             captured["url"] = url
         # content.php 응답에서 미디어 URL 추출 (최초 1회만 파싱)
@@ -243,6 +275,13 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
         #     for m in matches[:40]:
         #         print(f"  [DBG]   {m.strip()[:300]}")
 
+        if captured["url"] is None and _observed_hls:
+            _dl_log.warning(
+                "URL 추출 실패 — HLS(m3u8) 스트림만 감지됨. mp4 경로가 없어 현재 다운로더로는 저장 불가. url=%s",
+                lecture_url,
+            )
+        elif captured["url"] is None:
+            _dl_log.warning("URL 추출 실패 — 60초 폴링 후에도 mp4/HLS 모두 감지 안 됨. url=%s", lecture_url)
         return captured["url"]
 
     finally:

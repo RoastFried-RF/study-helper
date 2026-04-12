@@ -105,6 +105,8 @@ class Config:
     TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
     # 텔레그램 전송 후 파일 자동 삭제
     TELEGRAM_AUTO_DELETE: str = os.getenv("TELEGRAM_AUTO_DELETE", "")
+    # 다운로드 SSRF 허용 도메인 suffix 추가 (쉼표 구분, 예: ".cdn.example.com")
+    DOWNLOAD_EXTRA_HOSTS: str = os.getenv("DOWNLOAD_EXTRA_HOSTS", "")
 
     @classmethod
     def get_telegram_credentials(cls) -> tuple[str, str] | None:

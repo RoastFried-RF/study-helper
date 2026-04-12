@@ -9,7 +9,7 @@ from src.config import Config
 from src.logger import get_logger
 from src.scraper.course_scraper import CourseScraper
 from src.scraper.models import Course
-from src.ui.courses import _AUTO_SENTINEL, LectureAction, show_course_list, show_week_list
+from src.ui.courses import _AUTO_SENTINEL, _RECOVER_SENTINEL, LectureAction, show_course_list, show_week_list
 from src.ui.download import run_download
 from src.ui.login import (
     show_login_error,
@@ -110,6 +110,12 @@ async def run():
                 from src.ui.auto import run_auto_mode
 
                 await run_auto_mode(scraper, courses, details)
+                continue
+
+            if selected is _RECOVER_SENTINEL:
+                from src.ui.recover import run_recover
+
+                await run_recover(scraper, courses, details)
                 continue
 
             idx = courses.index(selected)

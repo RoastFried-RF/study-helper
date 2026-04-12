@@ -74,6 +74,15 @@ class LectureItem:
     def needs_watch(self) -> bool:
         return self.is_video and self.completion != "completed" and not self.is_upcoming
 
+    @property
+    def is_downloadable(self) -> bool:
+        """구조적으로 다운로드 가능한지 여부.
+
+        learningx 플레이어는 mp4/HLS URL 노출이 없어 다운로드 불가.
+        이 판정은 URL 패턴만으로 수행되며, 실제 추출 실패는 별도 경로에서 처리.
+        """
+        return self.is_video and "learningx" not in self.full_url
+
 
 @dataclass
 class Week:

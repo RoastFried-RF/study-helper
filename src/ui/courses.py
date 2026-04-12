@@ -96,6 +96,7 @@ def _redraw_course_list(
 
 
 _AUTO_SENTINEL = "__AUTO__"
+_RECOVER_SENTINEL = "__RECOVER__"
 
 
 def show_course_list(
@@ -108,12 +109,15 @@ def show_course_list(
     과목 목록을 테이블로 표시하고 선택된 Course를 반환한다.
     0 입력 시 None 반환 (종료). 'setting' 입력 시 설정 화면으로 이동.
     'auto' 입력 시 _AUTO_SENTINEL 반환 (자동 모드 진입 신호).
+    'recover' 입력 시 _RECOVER_SENTINEL 반환 (누락 다운로드 복구 진입 신호).
     details는 courses와 같은 순서의 CourseDetail 리스트 (로딩 실패 시 None).
     """
     _redraw_course_list(courses, details, user_id, latest_version)
 
     while True:
-        choice = Prompt.ask("  과목 선택 [dim](0: 종료 / setting: 설정 / auto: 자동 모드)[/dim]")
+        choice = Prompt.ask(
+            "  과목 선택 [dim](0: 종료 / setting: 설정 / auto: 자동 모드 / recover: 누락 복구)[/dim]"
+        )
         if choice == "0":
             return None
         if choice.lower() == "setting":
@@ -124,6 +128,8 @@ def show_course_list(
             continue
         if choice.lower() == "auto":
             return _AUTO_SENTINEL  # type: ignore[return-value]
+        if choice.lower() == "recover":
+            return _RECOVER_SENTINEL  # type: ignore[return-value]
         if choice.isdigit() and 1 <= int(choice) <= len(courses):
             return courses[int(choice) - 1]
         console.print("  [red]올바른 번호를 입력하세요.[/red]")

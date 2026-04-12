@@ -8,6 +8,7 @@
 import asyncio
 from pathlib import Path
 
+import requests
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -23,6 +24,17 @@ from rich.progress import (
 from rich.text import Text
 
 from src.config import Config
+from src.downloader.result import (
+    REASON_MP3_FAILED,
+    REASON_NETWORK,
+    REASON_PATH_INVALID,
+    REASON_SSRF_BLOCKED,
+    REASON_UNKNOWN,
+    REASON_UNSUPPORTED,
+    REASON_URL_EXTRACT_FAILED,
+    DownloadResult,
+    SSRFBlockedError,
+)
 from src.logger import get_error_logger
 from src.utils import safe_url
 
@@ -32,7 +44,7 @@ _RETRY_WAIT = 10  # seconds
 console = Console()
 
 
-async def run_download(page, lec, course, audio_only: bool = False, both: bool = False) -> bool:
+async def run_download(page, lec, course, audio_only: bool = False, both: bool = False) -> DownloadResult:
     """
     강의 영상을 다운로드하고 진행률을 Progress bar로 표시한다.
 
@@ -44,7 +56,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         both:       True면 mp4 유지 + mp3도 추가 생성
 
     Returns:
-        True: 정상 완료 / False: 오류
+        DownloadResult: ok=True면 mp4 다운로드까지 완료. 실패 시 reason에 분류된 사유가 담김.
     """
     from src.converter.audio_converter import convert_to_mp3
     from src.downloader.video_downloader import download_video_with_browser, extract_video_url, make_filepath
@@ -67,13 +79,13 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         if creds:
             msg_fn(creds[0], creds[1])
 
-    # 1. learningx 타입 조기 감지 (구조적으로 다운로드 불가)
-    if "learningx" in lec.full_url:
+    # 1. 구조적으로 다운로드 불가능한 항목 조기 감지 (learningx 등)
+    if not lec.is_downloadable:
         console.print("  [yellow]다운로드 불가:[/yellow] 이 강의는 다운로드가 지원되지 않는 형식입니다.")
         from src.notifier.telegram_notifier import notify_download_unsupported
 
         _tg_error(lambda t, c: notify_download_unsupported(t, c, course.long_name, lec.week_label, lec.title))
-        return False
+        return DownloadResult(ok=False, reason=REASON_UNSUPPORTED)
 
     # 2. video URL 추출 (최대 3회 재시도)
     video_url = None
@@ -99,7 +111,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         from src.notifier.telegram_notifier import notify_download_error
 
         _tg_error(lambda t, c: notify_download_error(t, c, course.long_name, lec.week_label, lec.title))
-        return False
+        return DownloadResult(ok=False, reason=REASON_URL_EXTRACT_FAILED)
 
     # 3. 파일 경로 결정
     mp4_relpath = make_filepath(course.long_name, lec.week_label, lec.title)
@@ -107,7 +119,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
     base_dir = Path(download_dir).resolve()
     if not mp4_path.is_relative_to(base_dir):
         console.print("  [bold red]오류:[/bold red] 잘못된 다운로드 경로가 감지되었습니다.")
-        return False
+        return DownloadResult(ok=False, reason=REASON_PATH_INVALID)
 
     if audio_only:
         final_path = mp4_path.with_suffix(".mp3")
@@ -148,7 +160,20 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         from src.notifier.telegram_notifier import notify_download_error
 
         _tg_error(lambda t, c: notify_download_error(t, c, course.long_name, lec.week_label, lec.title))
-        return False
+
+        # 실패 사유 분류
+        if isinstance(e, SSRFBlockedError):
+            reason = REASON_SSRF_BLOCKED
+        elif isinstance(
+            e,
+            requests.exceptions.ConnectionError
+            | requests.exceptions.Timeout
+            | requests.exceptions.ChunkedEncodingError,
+        ):
+            reason = REASON_NETWORK
+        else:
+            reason = REASON_UNKNOWN
+        return DownloadResult(ok=False, reason=reason)
 
     # 5. mp3 변환 (audio_only 또는 both)
     mp3_path: Path | None = None
@@ -161,7 +186,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
                 mp4_path.unlink()  # 음성 전용: 원본 mp4 삭제
         except Exception as e:
             console.print(f"  [bold red]mp3 변환 실패:[/bold red] {e}")
-            return False
+            return DownloadResult(ok=False, reason=REASON_MP3_FAILED, mp4_path=mp4_path)
 
         console.print()
         console.print("  [bold green]다운로드 완료![/bold green]")
@@ -273,4 +298,10 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
                 console.print("  [yellow]텔레그램 전송 실패. 파일은 유지됩니다.[/yellow]")
                 notify_summary_send_error(tg_token, tg_chat_id, course.long_name, lec.week_label, lec.title)
 
-    return True
+    return DownloadResult(
+        ok=True,
+        mp4_path=mp4_path if mp4_path.exists() else None,
+        mp3_path=mp3_path,
+        txt_path=txt_path,
+        summary_path=summary_path,
+    )
