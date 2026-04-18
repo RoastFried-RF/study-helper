@@ -2,31 +2,66 @@
 퀴즈 복구 스크립트: 누락된 강의 다운로드 → mp3 변환 → STT → AI 요약.
 
 사용법:
+  # 기본값(이전 하드코딩된 과목/주차) 실행
   .venv/Scripts/python.exe scripts/recover_downloads.py
+
+  # 특정 과목·주차 지정
+  .venv/Scripts/python.exe scripts/recover_downloads.py \\
+      --course 44038 --weeks 3주차 4주차
+
+환경변수:
+  FFMPEG_PATH          ffmpeg 실행파일 또는 bin 디렉토리 경로.
+                       미지정 시 PATH 에서 shutil.which 로 탐색.
+  STUDY_HELPER_DOWNLOAD_DIR  다운로드 루트. 미지정 시 Config.get_download_dir().
 """
 
+import argparse
 import asyncio
 import os
+import shutil
 import sys
 
-# ffmpeg PATH 추가 (winget 설치 위치)
-_FFMPEG_DIR = os.path.expandvars(
-    r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin"
-)
-if os.path.isdir(_FFMPEG_DIR):
-    os.environ["PATH"] = _FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")
+# ffmpeg 동적 탐지 — FFMPEG_PATH env 우선, 없으면 PATH 에서 which.
+# 과거 winget ffmpeg-8.1 경로를 하드코딩하던 것을 제거 (버전 업그레이드 시 파손).
+_ffmpeg_env = os.environ.get("FFMPEG_PATH", "").strip()
+if _ffmpeg_env:
+    _candidate = _ffmpeg_env
+    if os.path.isfile(_candidate):
+        _candidate = os.path.dirname(_candidate)
+    if os.path.isdir(_candidate):
+        os.environ["PATH"] = _candidate + os.pathsep + os.environ.get("PATH", "")
+elif not shutil.which("ffmpeg"):
+    print("[경고] ffmpeg 를 찾을 수 없습니다. FFMPEG_PATH env 또는 PATH 에 추가하세요.")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from pathlib import Path
+# sys.path 수정 후에 src.* 를 import 해야 하므로 E402 비활성화.
+from pathlib import Path  # noqa: E402
 
-from src.config import Config
-from src.scraper.course_scraper import CourseScraper
+from src.config import Config  # noqa: E402
+from src.scraper.course_scraper import CourseScraper  # noqa: E402
+
+# ── 기본 대상 과목 / 강의 필터 (CLI 로 override 가능) ──────────
+_DEFAULT_COURSE_ID = "44038"  # 4차산업혁명시대의기술혁신과AI
+_DEFAULT_WEEKS = ["3주차", "4주차"]
 
 
-# ── 대상 과목 / 강의 필터 ────────────────────────────────────────
-TARGET_COURSE_ID = "44038"  # 4차산업혁명시대의기술혁신과AI
-TARGET_WEEKS = {"3주차", "4주차"}
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="누락 강의 복구 파이프라인")
+    parser.add_argument(
+        "--course", default=_DEFAULT_COURSE_ID,
+        help=f"대상 과목 ID (default: {_DEFAULT_COURSE_ID})",
+    )
+    parser.add_argument(
+        "--weeks", nargs="+", default=_DEFAULT_WEEKS,
+        help=f"대상 주차 (default: {' '.join(_DEFAULT_WEEKS)})",
+    )
+    return parser.parse_args()
+
+
+_ARGS = _parse_args()
+TARGET_COURSE_ID = _ARGS.course
+TARGET_WEEKS = set(_ARGS.weeks)
 
 
 async def main():
@@ -41,11 +76,16 @@ async def main():
         print("[오류] .env에 LMS_USER_ID / LMS_PASSWORD가 설정되어 있지 않습니다.")
         return
 
-    download_dir = Config.get_download_dir()
-    # 로컬 실행 시 Docker 경로가 아닌 실제 경로로 보정
-    if download_dir.startswith("/data") and sys.platform == "win32":
-        download_dir = str(Path("D:/data/downloads"))
-        Path(download_dir).mkdir(parents=True, exist_ok=True)
+    # 우선순위: env STUDY_HELPER_DOWNLOAD_DIR > Config.get_download_dir()
+    # 로컬(Windows) 실행 시 Docker 경로(/data)로 잘못 판정되면 user Downloads 로 fallback.
+    env_override = os.environ.get("STUDY_HELPER_DOWNLOAD_DIR", "").strip()
+    if env_override:
+        download_dir = env_override
+    else:
+        download_dir = Config.get_download_dir()
+        if download_dir.startswith("/data") and sys.platform == "win32":
+            download_dir = str(Path.home() / "Downloads" / "study-helper")
+    Path(download_dir).mkdir(parents=True, exist_ok=True)
     print(f"  다운로드 경로: {download_dir}")
     print()
 
@@ -112,10 +152,10 @@ async def main():
 
             # mp4 다운로드 (없는 경우만)
             if not mp4_path.exists():
-                print(f"  → 영상 URL 추출 중...")
+                print("  → 영상 URL 추출 중...")
                 video_url = await extract_video_url(scraper.page, lec.full_url)
                 if not video_url:
-                    print(f"  → [실패] URL 추출 실패")
+                    print("  → [실패] URL 추출 실패")
                     results.append(("URL실패", lec.title, None))
                     continue
 
@@ -135,7 +175,7 @@ async def main():
 
             # mp3 변환
             if not mp3_path.exists():
-                print(f"  → mp3 변환 중...")
+                print("  → mp3 변환 중...")
                 try:
                     convert_to_mp3(mp4_path)
                     print(f"  → mp3 완료: {mp3_path.name}")
@@ -144,11 +184,11 @@ async def main():
                     results.append(("mp3실패", lec.title, None))
                     continue
             else:
-                print(f"  → mp3 이미 존재")
+                print("  → mp3 이미 존재")
 
             # STT
             if not txt_path.exists():
-                print(f"  → STT 변환 중... (시간이 걸립니다)")
+                print("  → STT 변환 중... (시간이 걸립니다)")
                 try:
                     from src.stt.transcriber import transcribe
                     transcribe(mp3_path, model_size=Config.WHISPER_MODEL or "base", language=Config.STT_LANGUAGE or "ko")
@@ -158,16 +198,16 @@ async def main():
                     results.append(("STT실패", lec.title, None))
                     continue
             else:
-                print(f"  → txt 이미 존재")
+                print("  → txt 이미 존재")
 
             # AI 요약
             if not summary_path.exists():
                 api_key = Config.GOOGLE_API_KEY
                 if not api_key:
-                    print(f"  → [스킵] AI 요약: API 키 없음")
+                    print("  → [스킵] AI 요약: API 키 없음")
                     results.append(("요약스킵", lec.title, txt_path))
                     continue
-                print(f"  → AI 요약 중...")
+                print("  → AI 요약 중...")
                 try:
                     from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, summarize
                     summary_path = summarize(
@@ -184,7 +224,7 @@ async def main():
                     results.append(("요약실패", lec.title, txt_path))
                     continue
             else:
-                print(f"  → 요약 이미 존재")
+                print("  → 요약 이미 존재")
                 results.append(("완료(기존)", lec.title, summary_path))
 
             print()
