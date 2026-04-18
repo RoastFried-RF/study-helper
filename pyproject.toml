@@ -22,8 +22,6 @@ dependencies = [
     "cryptography>=46.0.5,<47",
     # XML 파싱 보안 (XXE 방어)
     "defusedxml>=0.7.1",
-    # CVE-2025-68146, CVE-2026-22701 대응 — 3.20.0 취약 버전 제외
-    "filelock>=3.25.0",
     # API 서버 (Electron GUI 앱 연동)
     "fastapi>=0.115.0,<1",
     "uvicorn>=0.34.0,<1",
