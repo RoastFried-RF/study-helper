@@ -17,7 +17,17 @@ from urllib.parse import urlparse
 import requests
 from playwright.async_api import Page
 
-from src.downloader.result import SSRFBlockedError, SuspiciousStubError
+from src.downloader.result import (
+    REASON_URL_EXTRACT_CONTENT_PHP_MISSING,
+    REASON_URL_EXTRACT_CONTENT_PHP_PARSE,
+    REASON_URL_EXTRACT_EXCEPTION,
+    REASON_URL_EXTRACT_HLS_ONLY,
+    REASON_URL_EXTRACT_NO_PLAYER,
+    REASON_URL_EXTRACT_TIMEOUT,
+    ExtractionResult,
+    SSRFBlockedError,
+    SuspiciousStubError,
+)
 from src.player.background_player import click_play, dismiss_dialog, find_player_frame
 
 _dl_log = logging.getLogger(__name__)
@@ -150,16 +160,37 @@ def _sanitize_filename(name: str) -> str:
 
 async def extract_video_url(page: Page, lecture_url: str) -> str | None:
     """
-    LMS 강의 페이지에서 mp4 URL을 추출한다.
+    LMS 강의 페이지에서 mp4 URL을 추출한다 (backward-compat wrapper).
+
+    기존 호출자와의 호환을 위해 URL 문자열 또는 None 만 반환한다.
+    세분화된 실패 사유와 진단 컨텍스트가 필요한 호출자는
+    `extract_video_url_detailed()` 를 직접 호출한다.
+    """
+    result = await extract_video_url_detailed(page, lecture_url)
+    return result.url
+
+
+async def extract_video_url_detailed(page: Page, lecture_url: str) -> ExtractionResult:
+    """세분화된 실패 사유 + 진단 컨텍스트를 반환하는 URL 추출.
 
     Plan A: video 태그 src 폴링 (일반 타입)
     Plan B: Network 요청 가로채기 — mp4 URL이 포함된 요청 캡처 (readystream 등)
+    Plan C: content.php 응답 XML 을 비동기 파싱해 main_media 필드 추출
+
+    Returns:
+        ExtractionResult — 성공 시 url 채워짐·reason=None.
+        실패 시 reason 에 REASON_URL_EXTRACT_* 중 하나, diagnostics 에 관측된
+        상태(content_php_seen, content_php_parse_error, hls_observed, 등)
     """
 
     captured: dict[str, str | None] = {"url": None}
     _bg_task: asyncio.Task | None = None
     _content_parsed = False
-    _observed_hls = False  # m3u8/HLS URL 감지 시 실패 원인 분류에 사용
+    _content_php_seen = False            # content.php 응답이 한 번이라도 도착했는가
+    _content_php_parse_error: str | None = None  # Plan C 파싱 중 발생한 예외 메시지
+    _observed_hls = False                # m3u8/HLS URL 감지 시 실패 원인 분류에 사용
+    _observed_mp4_count = 0              # 관측된 mp4 URL 총 개수 (stub 포함)
+    _first_mp4_url: str | None = None    # 관측된 첫 mp4 URL (진단용, stub 판정에 도움)
 
     # 플레이어 초기화 단계에서 <video> 태그에 임시로 부착되는 stub 파일들.
     # 실제 강의가 아니므로 Plan A(DOM) / Plan B(network) 모두에서 제외한다.
@@ -170,10 +201,18 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
     def _is_valid_mp4(url: str) -> bool:
         return ".mp4" in url and not any(p in url for p in exclude_patterns)
 
-    def _note_hls(url: str) -> None:
-        nonlocal _observed_hls
+    def _note_observation(url: str) -> None:
+        """관측된 URL 의 진단 메타데이터를 기록 (HLS·mp4 count 등)."""
+        nonlocal _observed_hls, _observed_mp4_count, _first_mp4_url
         if not _observed_hls and (".m3u8" in url or "/hls/" in url):
             _observed_hls = True
+        if ".mp4" in url:
+            _observed_mp4_count += 1
+            if _first_mp4_url is None:
+                _first_mp4_url = url
+
+    # 하위 호환용 alias (기존 이름 유지)
+    _note_hls = _note_observation
 
     def _on_request(request):
         url = request.url
@@ -182,16 +221,18 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
             captured["url"] = url
 
     def _on_response(response):
-        nonlocal _bg_task, _content_parsed
+        nonlocal _bg_task, _content_parsed, _content_php_seen
         url = response.url
-        _note_hls(url)
+        _note_observation(url)
         if _is_valid_mp4(url) and captured["url"] is None:
             captured["url"] = url
         # content.php 응답에서 미디어 URL 추출 (최초 1회만 파싱)
         if not _content_parsed and "content.php" in url and "commons.ssu.ac.kr" in url:
             _content_parsed = True
+            _content_php_seen = True
 
             async def _parse_content_php():
+                nonlocal _content_php_parse_error
                 try:
                     from defusedxml.ElementTree import fromstring as _safe_fromstring
 
@@ -229,36 +270,66 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
 
                     if media_uri and captured["url"] is None:
                         captured["url"] = media_uri
+                    elif not media_uri:
+                        _content_php_parse_error = "파싱 성공 but main_media 필드 부재"
+                        _dl_log.info(
+                            "content.php 파싱됨 but main_media/media_uri 필드 없음 — url=%s", url,
+                        )
                 except Exception as e:
-                    _dl_log.debug("content.php 파싱 오류: %s", e)
+                    # DEBUG → INFO 승격: 이 정보가 파일 로그에 남아야 진단 가능
+                    _content_php_parse_error = f"{type(e).__name__}: {e}"
+                    _dl_log.info("content.php 파싱 오류: %s: %s", type(e).__name__, e)
 
             _bg_task = asyncio.create_task(_parse_content_php())
             _bg_task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+
+    def _diagnostics() -> dict:
+        """현재까지 관측한 진단 컨텍스트를 snapshot 한다."""
+        return {
+            "content_php_seen": _content_php_seen,
+            "content_php_parse_error": _content_php_parse_error,
+            "hls_observed": _observed_hls,
+            "mp4_urls_observed": _observed_mp4_count,
+            "first_mp4_url_head": (_first_mp4_url or "")[:120] if _first_mp4_url else None,
+        }
 
     page.on("request", _on_request)
     page.on("response", _on_response)
 
     try:
-        # print(f"  [DBG] 페이지 이동: {lecture_url[:80]}")
-        await page.goto(lecture_url, wait_until="domcontentloaded", timeout=_PAGE_GOTO_TIMEOUT)
+        try:
+            await page.goto(lecture_url, wait_until="domcontentloaded", timeout=_PAGE_GOTO_TIMEOUT)
+        except Exception as e:
+            # goto 자체 실패 — 네트워크/페이지 로드 타임아웃. 진단 컨텍스트와 함께 보고.
+            _dl_log.warning("page.goto 실패: %s: %s", type(e).__name__, e)
+            return ExtractionResult(
+                url=None,
+                reason=REASON_URL_EXTRACT_EXCEPTION,
+                diagnostics={**_diagnostics(), "exception": f"{type(e).__name__}: {e}"},
+            )
+
         # iframe + content.php 로드 대기 (비동기 파싱 완료까지)
         for _ in range(_CONTENT_PHP_POLL_MAX):
             await asyncio.sleep(_POLL_INTERVAL_SEC)
             if captured["url"]:
                 break
-        # print(f"  [DBG] 현재 페이지 URL: {page.url[:80]}")
 
         # content.php에서 미디어 URL이 추출됐으면 바로 반환
         if captured["url"]:
-            # print(f"  [NET] content.php에서 미디어 URL 추출 성공: {captured['url']}")
-            return captured["url"]
+            _dl_log.info("URL 추출 성공 (Plan B/C): %s", captured["url"][:120])
+            return ExtractionResult(url=captured["url"], diagnostics=_diagnostics())
 
         player_frame = await find_player_frame(page)
         if not player_frame:
-            # print("  [DBG] player frame을 찾지 못했습니다.")
-            # for f in page.frames:
-            #     print(f"  [DBG]   {f.url[:100]}")
-            return None
+            _dl_log.warning(
+                "player frame 미탐지 — %s",
+                {"frames": [f.url[:80] for f in page.frames[:5]], **_diagnostics()},
+            )
+            return ExtractionResult(
+                url=None,
+                reason=REASON_URL_EXTRACT_NO_PLAYER,
+                diagnostics=_diagnostics(),
+            )
 
         # print(f"  [DBG] player frame 발견: {player_frame.url[:80]}")
 
@@ -276,7 +347,8 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
         for _i in range(_VIDEO_POLL_MAX):
             # Plan B 먼저 확인 (network에서 이미 캡처됐을 수 있음)
             if captured["url"]:
-                return captured["url"]
+                _dl_log.info("URL 추출 성공 (Plan A/B 폴링 중): %s", captured["url"][:120])
+                return ExtractionResult(url=captured["url"], diagnostics=_diagnostics())
 
             # 이어보기 다이얼로그가 재생 도중 뒤늦게 뜨는 경우 처리
             if not dialog_dismissed:
@@ -298,7 +370,8 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
                         # BUG-FIX: stub 패턴 사전 차단 — 재생 초기 <video src="…preloader.mp4">
                         # 상태에서 Plan A가 반환하던 문제 해결.
                         if src and src.startswith("http") and _is_valid_mp4(src):
-                            return src
+                            _dl_log.info("URL 추출 성공 (Plan A vc-vplay): %s", src[:120])
+                            return ExtractionResult(url=src, diagnostics=_diagnostics())
 
                     # fallback: 모든 video 태그 확인
                     result = await frame.evaluate("""() => {
@@ -310,7 +383,8 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
                         return null;
                     }""")
                     if result and _is_valid_mp4(result):
-                        return result
+                        _dl_log.info("URL 추출 성공 (Plan A fallback): %s", result[:120])
+                        return ExtractionResult(url=result, diagnostics=_diagnostics())
                 except Exception:
                     pass  # if i % 10 == 0: print(f"  [DBG]   video 평가 오류: {e}")
 
@@ -347,18 +421,44 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
         #     for m in matches[:40]:
         #         print(f"  [DBG]   {m.strip()[:300]}")
 
-        if captured["url"] is None and _observed_hls:
-            _dl_log.warning(
-                "URL 추출 실패 — HLS(m3u8) 스트림만 감지됨. mp4 경로가 없어 현재 다운로더로는 저장 불가. url=%s",
-                lecture_url,
-            )
-        elif captured["url"] is None:
-            _dl_log.warning("URL 추출 실패 — 60초 폴링 후에도 mp4/HLS 모두 감지 안 됨. url=%s", lecture_url)
-        else:
-            # B2 진단: 추출된 URL의 호스트/경로를 남겨 가짜 webm 누출 조사에 사용
+        # 폴링 종료 후 성공한 경우
+        if captured["url"]:
             _extracted_host = urlparse(captured["url"]).hostname or "?"
             _dl_log.info("URL 추출 성공 — host=%s path=%s", _extracted_host, urlparse(captured["url"]).path[:120])
-        return captured["url"]
+            return ExtractionResult(url=captured["url"], diagnostics=_diagnostics())
+
+        # 실패 — sub-reason 판정 우선순위:
+        # 1) HLS 스트림만 관측 → HLS_ONLY (다운로더 미지원 알림)
+        # 2) content.php 응답은 왔지만 파싱 실패 → CONTENT_PHP_PARSE
+        # 3) content.php 응답이 아예 없음 → CONTENT_PHP_MISSING
+        # 4) 그 외 (mp4 한 번도 관측 못함) → TIMEOUT
+        diag = _diagnostics()
+        if _observed_hls and _observed_mp4_count == 0:
+            _dl_log.warning(
+                "URL 추출 실패 (HLS only) — mp4 경로 없어 현재 다운로더 미지원. url=%s diag=%s",
+                lecture_url, diag,
+            )
+            return ExtractionResult(url=None, reason=REASON_URL_EXTRACT_HLS_ONLY, diagnostics=diag)
+
+        if _content_php_seen and _content_php_parse_error:
+            _dl_log.warning(
+                "URL 추출 실패 (content.php 파싱 실패) — %s. url=%s",
+                _content_php_parse_error, lecture_url,
+            )
+            return ExtractionResult(url=None, reason=REASON_URL_EXTRACT_CONTENT_PHP_PARSE, diagnostics=diag)
+
+        if not _content_php_seen:
+            _dl_log.warning(
+                "URL 추출 실패 (content.php 응답 없음) — 플레이어 iframe 로드 문제 가능. url=%s diag=%s",
+                lecture_url, diag,
+            )
+            return ExtractionResult(url=None, reason=REASON_URL_EXTRACT_CONTENT_PHP_MISSING, diagnostics=diag)
+
+        _dl_log.warning(
+            "URL 추출 실패 (%ds 폴링 timeout) — mp4/HLS 모두 미관측. url=%s diag=%s",
+            int(_VIDEO_POLL_MAX * _POLL_INTERVAL_SEC), lecture_url, diag,
+        )
+        return ExtractionResult(url=None, reason=REASON_URL_EXTRACT_TIMEOUT, diagnostics=diag)
 
     finally:
         page.remove_listener("request", _on_request)

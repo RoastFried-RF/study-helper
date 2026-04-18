@@ -61,7 +61,11 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         DownloadResult: ok=True면 mp4 다운로드까지 완료. 실패 시 reason에 분류된 사유가 담김.
     """
     from src.converter.audio_converter import convert_to_mp3
-    from src.downloader.video_downloader import download_video_with_browser, extract_video_url, make_filepath
+    from src.downloader.video_downloader import (
+        download_video_with_browser,
+        extract_video_url_detailed,
+        make_filepath,
+    )
 
     console.print()
     console.print(
@@ -91,29 +95,35 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
 
     # 2. video URL 추출 (최대 3회 재시도)
     video_url = None
+    last_extraction = None  # 마지막 시도의 ExtractionResult
     for attempt in range(1, _MAX_URL_RETRIES + 1):
         if attempt == 1:
             console.print("  [dim]영상 URL 추출 중...[/dim]")
         else:
             console.print(f"  [dim]영상 URL 추출 재시도 ({attempt}/{_MAX_URL_RETRIES})...[/dim]")
-        video_url = await extract_video_url(page, lec.full_url)
-        if video_url:
+        last_extraction = await extract_video_url_detailed(page, lec.full_url)
+        if last_extraction.url:
+            video_url = last_extraction.url
             break
         if attempt < _MAX_URL_RETRIES:
-            console.print(f"  [yellow]URL 추출 실패. {_RETRY_WAIT}초 후 재시도합니다...[/yellow]")
+            console.print(f"  [yellow]URL 추출 실패 ({last_extraction.reason}). {_RETRY_WAIT}초 후 재시도합니다...[/yellow]")
             await asyncio.sleep(_RETRY_WAIT)
 
     if not video_url:
-        console.print("  [bold red]오류:[/bold red] 영상 URL을 찾지 못했습니다. (3회 시도)")
+        # 세분화된 sub-reason 과 진단 컨텍스트를 그대로 progress_store/로그에 전달.
+        extract_reason = (last_extraction.reason if last_extraction else None) or REASON_URL_EXTRACT_FAILED
+        diag = last_extraction.diagnostics if last_extraction else {}
+        console.print(f"  [bold red]오류:[/bold red] 영상 URL 추출 실패 ({extract_reason}, 3회 시도)")
         logger, log_path = get_error_logger("download")
         logger.info("강의: %s", lec.title)
         logger.info("URL: %s", safe_url(lec.full_url))
-        logger.info("오류: 영상 URL 추출 실패 (3회 재시도 후에도 실패)")
+        logger.info("오류: 영상 URL 추출 실패 (3회 재시도 후에도 실패) — reason=%s", extract_reason)
+        logger.info("진단: %s", diag)
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
 
         _tg_error(lambda t, c: notify_download_error(t, c, course.long_name, lec.week_label, lec.title))
-        return DownloadResult(ok=False, reason=REASON_URL_EXTRACT_FAILED)
+        return DownloadResult(ok=False, reason=extract_reason)
 
     # 3. 파일 경로 결정
     mp4_relpath = make_filepath(course.long_name, lec.week_label, lec.title)
