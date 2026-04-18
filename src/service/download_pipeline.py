@@ -241,22 +241,29 @@ async def run_pipeline(
 
     # ── 3. AI 요약 ───────────────────────────────────────────────
     if result.txt_path and ai_enabled and ai_api_key:
-        await _emit(PipelineStage.SUMMARIZE, 0.0, "AI 요약 중...")
-        try:
-            loop = asyncio.get_running_loop()
-            result.summary_path = await loop.run_in_executor(
-                None,
-                lambda: summarize_text(
-                    result.txt_path,
-                    agent=ai_agent,
-                    api_key=ai_api_key,
-                    model=ai_model,
-                    extra_prompt=ai_extra_prompt,
-                ),
-            )
-            await _emit(PipelineStage.SUMMARIZE, 1.0, "AI 요약 완료")
-        except Exception as e:
-            result.stage_errors["summarize"] = str(e)
+        # B4: STT 결과가 비어 있으면 요약 호출을 생략 (API 비용/실패 알림 방지)
+        from src.stt.transcriber import is_transcript_usable
+
+        if not is_transcript_usable(result.txt_path):
+            result.stage_errors["summarize"] = "STT 결과 없음 — 요약 생략 (무음/저음량 영상 가능)"
+            await _emit(PipelineStage.SUMMARIZE, 1.0, "STT 결과 없음 — 요약 생략")
+        else:
+            await _emit(PipelineStage.SUMMARIZE, 0.0, "AI 요약 중...")
+            try:
+                loop = asyncio.get_running_loop()
+                result.summary_path = await loop.run_in_executor(
+                    None,
+                    lambda: summarize_text(
+                        result.txt_path,
+                        agent=ai_agent,
+                        api_key=ai_api_key,
+                        model=ai_model,
+                        extra_prompt=ai_extra_prompt,
+                    ),
+                )
+                await _emit(PipelineStage.SUMMARIZE, 1.0, "AI 요약 완료")
+            except Exception as e:
+                result.stage_errors["summarize"] = str(e)
 
     # ── 4. 텔레그램 알림 ─────────────────────────────────────────
     if result.summary_path and tg_token and tg_chat_id:
