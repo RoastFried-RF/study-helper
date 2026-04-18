@@ -2,8 +2,13 @@ services:
   study-helper:
     image: igor0670/study-helper:v1.1.1
 
-    # ── 소스 수정 후 로컬 빌드 시 위 줄을 아래 두 줄로 교체 ──────────
-    # build: .
+    # ── 소스 수정 후 로컬 빌드 시 위 줄을 아래로 교체 ─────────────
+    # build:
+    #   context: .
+    #   args:
+    #     # 호스트 사용자 UID/GID 로 컨테이너 appuser 를 맞춰 볼륨 권한 문제 회피
+    #     APP_UID: "${APP_UID:-1000}"
+    #     APP_GID: "${APP_GID:-1000}"
     # image: study-helper:latest
     # ──────────────────────────────────────────────────────────────────
 
@@ -27,6 +32,10 @@ services:
 
     volumes:
       # .env 파일 마운트 — save_credentials() 저장 내용이 호스트에 영속화됨
+      # NOTE: 컨테이너는 비-root appuser(UID=1000) 로 실행된다. Linux 호스트에서
+      # 현재 사용자 UID 가 1000 이 아니면 아래 명령으로 권한을 맞추거나
+      # `--build-arg APP_UID=$(id -u) APP_GID=$(id -g)` 로 이미지 재빌드:
+      #   sudo chown 1000:1000 .env .secret_key logs/ data/
       - ./.env:/app/.env
 
       # 암호화 키 — 없으면 매 실행마다 새 키 생성 → 복호화 실패 → 계정 재입력
@@ -45,10 +54,10 @@ services:
       - ./data:/data
 
       # Whisper 모델 캐시 — 재빌드 시 재다운로드 방지 (~150MB/base, ~1.5GB/large)
-      - whisper-cache:/root/.cache/huggingface
+      - whisper-cache:/home/appuser/.cache/huggingface
 
       # Playwright Chromium 캐시 — 재빌드 시 재다운로드 방지
-      - playwright-cache:/root/.cache/ms-playwright
+      - playwright-cache:/home/appuser/.cache/ms-playwright
 
     # 컨테이너 종료 후 자동 제거 (데이터는 볼륨에 보존)
     restart: "no"
