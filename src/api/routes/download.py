@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
@@ -142,12 +143,14 @@ async def pipeline_ws(ws: WebSocket):
     각 단계의 진행 상태를 JSON 메시지로 스트리밍한다.
     """
     await ws.accept()
+    pipeline_task: asyncio.Task | None = None
     try:
-        # WebSocket 토큰 인증 (첫 메시지)
+        # WebSocket 토큰 인증 (첫 메시지) — 상수시간 비교
         _api_token = os.getenv("STUDY_HELPER_API_TOKEN", "")
         if _api_token:
             auth_msg = await ws.receive_json()
-            if auth_msg.get("token") != _api_token:
+            _client_token = auth_msg.get("token") or ""
+            if not secrets.compare_digest(_client_token, _api_token):
                 await ws.send_json({"type": "error", "message": "인증 실패"})
                 await ws.close(code=4003)
                 return
@@ -170,26 +173,30 @@ async def pipeline_ws(ws: WebSocket):
 
         # Config에서 설정 로드
         tg = Config.get_telegram_credentials()
-        result = await run_pipeline(
-            mp4_path=Path(req.mp4_path),
-            course_name=req.course_name,
-            week_label=req.week_label,
-            lecture_title=req.lecture_title,
-            audio_only=req.audio_only,
-            both=req.both,
-            stt_enabled=Config.STT_ENABLED == "true",
-            stt_model=Config.WHISPER_MODEL or "base",
-            stt_language=Config.STT_LANGUAGE,
-            ai_enabled=Config.AI_ENABLED == "true",
-            ai_agent=Config.AI_AGENT or "gemini",
-            ai_api_key=Config.GOOGLE_API_KEY if Config.AI_AGENT == "gemini" else Config.OPENAI_API_KEY,
-            ai_model=Config.GEMINI_MODEL,
-            ai_extra_prompt=Config.SUMMARY_PROMPT_EXTRA,
-            tg_token=tg[0] if tg else "",
-            tg_chat_id=tg[1] if tg else "",
-            tg_auto_delete=Config.TELEGRAM_AUTO_DELETE == "true",
-            on_progress=_on_progress,
+        # 파이프라인을 별도 태스크로 실행 — 클라이언트 disconnect 시 cancel 하기 위함.
+        pipeline_task = asyncio.create_task(
+            run_pipeline(
+                mp4_path=Path(req.mp4_path),
+                course_name=req.course_name,
+                week_label=req.week_label,
+                lecture_title=req.lecture_title,
+                audio_only=req.audio_only,
+                both=req.both,
+                stt_enabled=Config.STT_ENABLED == "true",
+                stt_model=Config.WHISPER_MODEL or "base",
+                stt_language=Config.STT_LANGUAGE,
+                ai_enabled=Config.AI_ENABLED == "true",
+                ai_agent=Config.AI_AGENT or "gemini",
+                ai_api_key=Config.GOOGLE_API_KEY if Config.AI_AGENT == "gemini" else Config.OPENAI_API_KEY,
+                ai_model=Config.GEMINI_MODEL,
+                ai_extra_prompt=Config.SUMMARY_PROMPT_EXTRA,
+                tg_token=tg[0] if tg else "",
+                tg_chat_id=tg[1] if tg else "",
+                tg_auto_delete=Config.TELEGRAM_AUTO_DELETE == "true",
+                on_progress=_on_progress,
+            )
         )
+        result = await pipeline_task
 
         await ws.send_json(
             {
@@ -205,9 +212,21 @@ async def pipeline_ws(ws: WebSocket):
         )
         await ws.close()
     except WebSocketDisconnect:
-        pass
+        # 클라이언트 disconnect — 실행 중인 파이프라인을 취소해 유휴 CPU/메모리 낭비 방지
+        if pipeline_task and not pipeline_task.done():
+            pipeline_task.cancel()
+            try:
+                await pipeline_task
+            except (asyncio.CancelledError, Exception):
+                pass
     except Exception as e:
         _log.error("Pipeline WebSocket 오류: %s", e, exc_info=True)
+        if pipeline_task and not pipeline_task.done():
+            pipeline_task.cancel()
+            try:
+                await pipeline_task
+            except (asyncio.CancelledError, Exception):
+                pass
         try:
             await ws.send_json({"type": "error", "message": "파이프라인 실행 중 오류가 발생했습니다"})
             await ws.close()
