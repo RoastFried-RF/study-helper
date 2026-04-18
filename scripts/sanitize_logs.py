@@ -22,49 +22,22 @@ Phase 2 에서 추가한 `_mask_sensitive` 와 동일 규칙으로 기존 파일
 from __future__ import annotations
 
 import argparse
-import re
+import os
 import shutil
 import sys
 from pathlib import Path
 
-# src.player.background_player 의 _mask_sensitive 와 동일 규칙을 그대로 재현.
-# (의존성 import 없이 스크립트 단독 실행 가능하도록 복제)
-_MASK = "***REDACTED***"
-_SENSITIVE_KV_RE = re.compile(
-    r"(?i)("
-    r"oauth_(?:signature|nonce|timestamp|consumer_key|token)"
-    r"|csrf[-_]?token"
-    r"|custom_user_(?:email|login|name_full|name_family|name_given|id)"
-    r"|custom_canvas_user_(?:id|login_id)"
-    r"|lis_person_(?:contact_email_primary|name_full|name_given|name_family|sourcedid)"
-    r"|user_image|user_id|user_login|user_email"
-    r"|password|passwd|secret|api[_-]?key|authorization|token"
-    r")=[^&\s]+"
-)
-_SENSITIVE_HTML_RE = re.compile(
-    r"(?is)("
-    r'<meta\s+name="csrf-token"\s+content=")[^"]*(")'
-    r'|(data-user_(?:email|login|name|id)=")[^"]*(")'
-)
+# src.util.log_sanitize 공용 모듈 재사용 (마스킹 규칙 drift 방지)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from src.util.log_sanitize import count_sensitive, mask_sensitive
 
 
 def mask(text: str) -> tuple[str, int]:
     """마스킹된 텍스트와 치환 건수를 반환."""
-    count = 0
-
-    def _kv_sub(m: re.Match) -> str:
-        nonlocal count
-        count += 1
-        return f"{m.group(1)}={_MASK}"
-
-    def _html_sub(m: re.Match) -> str:
-        nonlocal count
-        count += 1
-        return (m.group(1) or m.group(3) or "") + _MASK + (m.group(2) or m.group(4) or "")
-
-    out = _SENSITIVE_KV_RE.sub(_kv_sub, text)
-    out = _SENSITIVE_HTML_RE.sub(_html_sub, out)
-    return out, count
+    count = count_sensitive(text)
+    if count == 0:
+        return text, 0
+    return mask_sensitive(text), count
 
 
 def process_file(path: Path, apply: bool, backup: bool) -> tuple[int, bool]:
@@ -123,7 +96,15 @@ def main() -> int:
         print(f"[ERROR] 로그 디렉토리가 없습니다: {logs_dir}", file=sys.stderr)
         return 1
 
-    log_files = sorted(logs_dir.glob("*.log")) + sorted(logs_dir.glob("*.log.*"))
+    # .log, .log.YYYY-MM-DD (rotation) 만 대상. .orig 백업은 재처리 방지 위해 제외.
+    log_files = [
+        p for p in sorted(logs_dir.glob("*.log"))
+        if not p.name.endswith(".orig")
+    ]
+    log_files += [
+        p for p in sorted(logs_dir.glob("*.log.*"))
+        if not p.name.endswith(".orig")
+    ]
     if not log_files:
         print(f"대상 파일 없음 ({logs_dir})")
         return 0
@@ -137,13 +118,14 @@ def main() -> int:
     for log in log_files:
         hits, changed = process_file(log, apply=args.apply, backup=not args.no_backup)
         if hits:
-            mark = "✓" if changed else "."
-            print(f"  [{mark}] {log.name}: {hits}건")
+            # Windows cp949 콘솔에서 Unicode 체크마크가 깨지지 않도록 ASCII만 사용.
+            mark = "OK" if changed else "..."
+            print(f"  [{mark}] {log.name}: {hits} hits")
             total_hits += hits
             if changed:
                 total_changed += 1
         else:
-            print(f"  [-] {log.name}: 0건")
+            print(f"  [--] {log.name}: 0 hits")
 
     print()
     if args.apply:

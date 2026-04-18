@@ -15,13 +15,14 @@ LMS가 수강 완료로 인식하도록 실제 재생 시간을 유지한다.
 import asyncio
 import json
 import math
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 from playwright.async_api import Frame, Page
+
+from src.util.log_sanitize import mask_sensitive as _mask_sensitive
 
 # ── 상수 ─────────────────────────────────────────────────────────
 _POLL_INTERVAL = 1.0  # 진행 폴링 주기 (초)
@@ -40,43 +41,8 @@ _ALLOWED_PLAYER_HOSTS = {"canvas.ssu.ac.kr", "commons.ssu.ac.kr"}
 # body 읽기를 건너뛸 바이너리 Content-Type 접두사
 _BINARY_CT = ("image/", "video/", "audio/", "font/", "application/octet-stream")
 
-# ── PII/secret 마스킹 ────────────────────────────────────────────
-# debug sniff 로그의 request/response body 에 포함될 수 있는 민감 정보를
-# 정규식으로 치환한다. 과거 로그에서 OAuth signature, CSRF 토큰, 학번,
-# 사용자 이메일/실명 평문 유출이 확인되어 반드시 모든 body 로그에 적용한다.
-_MASK = "***REDACTED***"
-# URL-encoded form body (x-www-form-urlencoded) 용 패턴
-_SENSITIVE_KV_RE = re.compile(
-    r"(?i)("
-    r"oauth_(?:signature|nonce|timestamp|consumer_key|token)"
-    r"|csrf[-_]?token"
-    r"|custom_user_(?:email|login|name_full|name_family|name_given|id)"
-    r"|custom_canvas_user_(?:id|login_id)"
-    r"|lis_person_(?:contact_email_primary|name_full|name_given|name_family|sourcedid)"
-    r"|user_image|user_id|user_login|user_email"
-    r"|password|passwd|secret|api[_-]?key|authorization|token"
-    r")=[^&\s]+"
-)
-# HTML meta / data-* attribute 용 패턴
-_SENSITIVE_HTML_RE = re.compile(
-    r"(?is)("
-    r'<meta\s+name="csrf-token"\s+content=")[^"]*(")'
-    r'|(data-user_(?:email|login|name|id)=")[^"]*(")'
-)
-
-
-def _mask_sensitive(text: str) -> str:
-    """로그로 남기기 전에 OAuth/CSRF/PII 를 마스킹한다."""
-    if not text:
-        return text
-    text = _SENSITIVE_KV_RE.sub(lambda m: f"{m.group(1)}={_MASK}", text)
-    text = _SENSITIVE_HTML_RE.sub(
-        lambda m: (m.group(1) or m.group(3) or "")
-        + _MASK
-        + (m.group(2) or m.group(4) or ""),
-        text,
-    )
-    return text
+# PII/secret 마스킹은 src.util.log_sanitize.mask_sensitive 공용 모듈 사용.
+# scripts/sanitize_logs.py 에서도 동일 규칙을 공유해 drift 방지.
 
 
 def _set_sl_param(url: str, value: str) -> str:
