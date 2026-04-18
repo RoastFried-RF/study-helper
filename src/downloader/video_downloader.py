@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import requests
 from playwright.async_api import Page
 
-from src.downloader.result import SSRFBlockedError
+from src.downloader.result import SSRFBlockedError, SuspiciousStubError
 from src.player.background_player import click_play, dismiss_dialog, find_player_frame
 
 _dl_log = logging.getLogger(__name__)
@@ -25,6 +25,10 @@ _dl_log = logging.getLogger(__name__)
 _MAX_RETRIES = 3
 _TIMEOUT = (10, 60)  # (connect, read) seconds
 _CHUNK_SIZE = 65536  # 64 KB
+
+# B2: sanity check — 실제 LMS 강의 mp4는 수십 MB 이상. 이보다 작으면 가짜/stub 의심.
+# 2 MB 기준은 "가장 짧은 공지/인트로 강의도 통상 이 크기를 넘는다"는 경험치.
+_MIN_PLAUSIBLE_VIDEO_BYTES = 2 * 1024 * 1024
 _PAGE_GOTO_TIMEOUT = 60_000  # ms — Playwright page.goto timeout
 _CONTENT_PHP_POLL_MAX = 20  # content.php 파싱 대기 폴링 횟수 (x0.5s = 10s)
 _VIDEO_POLL_MAX = 120  # video DOM 폴링 횟수 (x0.5s = 60s)
@@ -157,7 +161,11 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
     _content_parsed = False
     _observed_hls = False  # m3u8/HLS URL 감지 시 실패 원인 분류에 사용
 
-    exclude_patterns = ("preloader.mp4", "preview.mp4", "thumbnail.mp4")
+    # 플레이어 초기화 단계에서 <video> 태그에 임시로 부착되는 stub 파일들.
+    # 실제 강의가 아니므로 Plan A(DOM) / Plan B(network) 모두에서 제외한다.
+    # BUG-FIX: intro.mp4 누락으로 Plan A가 stub을 진짜 URL로 오인하여
+    # 재시도 불가 처리로 강의가 영구 누락되던 문제 수정.
+    exclude_patterns = ("preloader.mp4", "preview.mp4", "thumbnail.mp4", "intro.mp4")
 
     def _is_valid_mp4(url: str) -> bool:
         return ".mp4" in url and not any(p in url for p in exclude_patterns)
@@ -287,9 +295,9 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
                     video_el = await frame.query_selector("video.vc-vplay-video1")
                     if video_el:
                         src = await video_el.get_attribute("src")
-                        # if i % 10 == 0:
-                        #     print(f"  [DBG]   vc-vplay-video1 src: {str(src)[:80]}")
-                        if src and src.startswith("http") and ".mp4" in src:
+                        # BUG-FIX: stub 패턴 사전 차단 — 재생 초기 <video src="…preloader.mp4">
+                        # 상태에서 Plan A가 반환하던 문제 해결.
+                        if src and src.startswith("http") and _is_valid_mp4(src):
                             return src
 
                     # fallback: 모든 video 태그 확인
@@ -301,9 +309,7 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
                         }
                         return null;
                     }""")
-                    # if i % 10 == 0:
-                    #     print(f"  [DBG]   fallback video.src: {str(result)[:80]}")
-                    if result:
+                    if result and _is_valid_mp4(result):
                         return result
                 except Exception:
                     pass  # if i % 10 == 0: print(f"  [DBG]   video 평가 오류: {e}")
@@ -348,6 +354,10 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
             )
         elif captured["url"] is None:
             _dl_log.warning("URL 추출 실패 — 60초 폴링 후에도 mp4/HLS 모두 감지 안 됨. url=%s", lecture_url)
+        else:
+            # B2 진단: 추출된 URL의 호스트/경로를 남겨 가짜 webm 누출 조사에 사용
+            _extracted_host = urlparse(captured["url"]).hostname or "?"
+            _dl_log.info("URL 추출 성공 — host=%s path=%s", _extracted_host, urlparse(captured["url"]).path[:120])
         return captured["url"]
 
     finally:
@@ -491,6 +501,13 @@ def _stream_download(
             response.raise_for_status()
             return
 
+        # B2 진단: CDN 응답의 Content-Type + Content-Length를 로깅
+        _ct = response.headers.get("content-type", "?")
+        _dl_log.info(
+            "다운로드 응답 — status=%s content-type=%s content-length=%s path=%s",
+            response.status_code, _ct, total, save_path.name,
+        )
+
         with open(save_path, mode) as f:
             for chunk in response.iter_content(chunk_size=_CHUNK_SIZE):
                 if chunk:
@@ -500,6 +517,60 @@ def _stream_download(
                         on_progress(downloaded, total)
     finally:
         response.close()
+
+    # B2 sanity check: 컨테이너 시그니처/최소 크기 검증 — 실패 시 SuspiciousStubError 발생
+    _validate_downloaded_file(save_path)
+
+
+def _validate_downloaded_file(save_path: Path) -> None:
+    """저장된 mp4 파일의 시그니처와 크기를 검사해 가짜/stub 파일을 차단한다.
+
+    차단 조건:
+    - WebM/Matroska EBML 시그니처(`1A 45 DF A3`) — 플레이어 단계의 fake webm이 mp4로 저장된 경우
+    - 파일 크기가 _MIN_PLAUSIBLE_VIDEO_BYTES 미만 — CDN 인증 실패 stub 가능
+
+    검증 실패 시 파일을 삭제하고 SuspiciousStubError를 raise 해 파이프라인이
+    쓰레기 파일로 진행되지 않도록 한다.
+    """
+    try:
+        with open(save_path, "rb") as _fh:
+            _head = _fh.read(16)
+    except OSError as _e:
+        _dl_log.warning("파일 시그니처 확인 실패: %s", _e)
+        return
+
+    _size = save_path.stat().st_size if save_path.exists() else 0
+    _magic_hex = _head.hex() if _head else ""
+
+    # WebM/Matroska 시그니처 감지 — 가짜 webm이 mp4로 저장됨
+    if _head[:4] == b"\x1a\x45\xdf\xa3":
+        _dl_log.error(
+            "다운로드 파일이 WebM(EBML) 시그니처 — fake webm 누출 의심. magic=%s size=%d path=%s",
+            _magic_hex, _size, save_path,
+        )
+        _remove_partial(save_path)
+        raise SuspiciousStubError(
+            f"WebM 시그니처가 감지된 mp4 — 플레이어 fake video가 다운로드에 누출됨 (size={_size})"
+        )
+
+    # MP4 ftyp 시그니처 부재 — 알 수 없는 컨테이너
+    if len(_head) < 8 or _head[4:8] != b"ftyp":
+        _dl_log.warning("다운로드 파일 시그니처 미상 — magic=%s size=%d path=%s", _magic_hex, _size, save_path)
+        # 시그니처 미상이지만 크기가 충분하면 일단 통과 (관측 목적)
+        # 크기까지 작으면 아래 분기에서 차단
+
+    # 비정상적으로 작은 파일 — CDN stub 또는 빈 응답 의심
+    if _size < _MIN_PLAUSIBLE_VIDEO_BYTES:
+        _dl_log.error(
+            "다운로드 파일 크기 비정상 (< %d bytes) — CDN stub 가능. size=%d path=%s",
+            _MIN_PLAUSIBLE_VIDEO_BYTES, _size, save_path,
+        )
+        _remove_partial(save_path)
+        raise SuspiciousStubError(
+            f"다운로드 파일 크기 비정상 ({_size} bytes) — 실제 강의가 아닌 stub 가능"
+        )
+
+    _dl_log.debug("다운로드 파일 검증 통과 — magic=%s size=%d", _magic_hex, _size)
 
 
 def _remove_partial(path: Path):

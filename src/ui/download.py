@@ -29,11 +29,13 @@ from src.downloader.result import (
     REASON_NETWORK,
     REASON_PATH_INVALID,
     REASON_SSRF_BLOCKED,
+    REASON_SUSPICIOUS_STUB,
     REASON_UNKNOWN,
     REASON_UNSUPPORTED,
     REASON_URL_EXTRACT_FAILED,
     DownloadResult,
     SSRFBlockedError,
+    SuspiciousStubError,
 )
 from src.logger import get_error_logger
 from src.utils import safe_url
@@ -164,6 +166,8 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         # 실패 사유 분류
         if isinstance(e, SSRFBlockedError):
             reason = REASON_SSRF_BLOCKED
+        elif isinstance(e, SuspiciousStubError):
+            reason = REASON_SUSPICIOUS_STUB
         elif isinstance(
             e,
             requests.exceptions.ConnectionError
@@ -224,44 +228,50 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
     # 7. AI 요약 (txt가 있고 AI_ENABLED=true인 경우)
     summary_path = None
     if txt_path and Config.AI_ENABLED == "true":
-        api_key = Config.GOOGLE_API_KEY if Config.AI_AGENT == "gemini" else Config.OPENAI_API_KEY
-        model = Config.GEMINI_MODEL if Config.AI_AGENT == "gemini" else ""
-        if not api_key:
-            console.print("  [yellow]AI 요약 건너뜀: API 키가 설정되지 않았습니다.[/yellow]")
+        # B4: STT 결과가 비어 있으면 요약 호출 생략
+        from src.stt.transcriber import is_transcript_usable
+
+        if not is_transcript_usable(txt_path):
+            console.print("  [yellow]AI 요약 건너뜀: STT 결과가 비어 있습니다 (무음/저음량 영상 가능).[/yellow]")
         else:
-            import warnings
+            api_key = Config.GOOGLE_API_KEY if Config.AI_AGENT == "gemini" else Config.OPENAI_API_KEY
+            model = Config.GEMINI_MODEL if Config.AI_AGENT == "gemini" else ""
+            if not api_key:
+                console.print("  [yellow]AI 요약 건너뜀: API 키가 설정되지 않았습니다.[/yellow]")
+            else:
+                import warnings
 
-            from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, summarize
+                from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, summarize
 
-            console.print()
-            spinner_progress = Progress(
-                SpinnerColumn(),
-                TextColumn("  [bold]{task.description}"),
-                TimeElapsedColumn(),
-                console=console,
-                expand=False,
-            )
-            task_id = spinner_progress.add_task("AI 요약 중...", total=None)
+                console.print()
+                spinner_progress = Progress(
+                    SpinnerColumn(),
+                    TextColumn("  [bold]{task.description}"),
+                    TimeElapsedColumn(),
+                    console=console,
+                    expand=False,
+                )
+                task_id = spinner_progress.add_task("AI 요약 중...", total=None)
 
-            try:
-                with Live(spinner_progress, console=console, refresh_per_second=8):
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        loop = asyncio.get_running_loop()
-                        summary_path = await loop.run_in_executor(
-                            None,
-                            lambda: summarize(
-                                txt_path,
-                                agent=Config.AI_AGENT or "gemini",
-                                api_key=api_key,
-                                model=model or GEMINI_DEFAULT_MODEL,
-                                extra_prompt=Config.SUMMARY_PROMPT_EXTRA,
-                            ),
-                        )
-                console.print("  [bold green]AI 요약 완료![/bold green]")
-                console.print(f"  [dim]{summary_path}[/dim]")
-            except Exception as e:
-                console.print(f"  [bold red]AI 요약 실패:[/bold red] {e}")
+                try:
+                    with Live(spinner_progress, console=console, refresh_per_second=8):
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            loop = asyncio.get_running_loop()
+                            summary_path = await loop.run_in_executor(
+                                None,
+                                lambda: summarize(
+                                    txt_path,
+                                    agent=Config.AI_AGENT or "gemini",
+                                    api_key=api_key,
+                                    model=model or GEMINI_DEFAULT_MODEL,
+                                    extra_prompt=Config.SUMMARY_PROMPT_EXTRA,
+                                ),
+                            )
+                    console.print("  [bold green]AI 요약 완료![/bold green]")
+                    console.print(f"  [dim]{summary_path}[/dim]")
+                except Exception as e:
+                    console.print(f"  [bold red]AI 요약 실패:[/bold red] {e}")
 
     # 8. 텔레그램 알림 (AI 요약 완료 시)
     if summary_path and Config.TELEGRAM_ENABLED == "true":
