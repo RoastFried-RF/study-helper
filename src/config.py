@@ -144,11 +144,13 @@ class Config:
 
         Windows 가드(SEC-DRIVE-ROOT-TRAP):
             `DOWNLOAD_DIR=/data/downloads` 같은 Docker 용 unix 절대경로가
-            Windows 네이티브 실행 시 `D:\\data\\downloads` 드라이브 루트로
-            해석되어 파일이 예상치 못한 곳에 저장되는 문제 방지.
-            Docker 컨테이너(`/.dockerenv` + `/data`)가 아닌 Windows 에서
-            `/` 로 시작하는 경로면 `_default_download_dir()` 로 fallback 하고
-            최초 한 번 경고 로그를 남긴다.
+            Windows 네이티브 실행 시 드라이브 루트(`D:\\data\\downloads`)로
+            해석된다. 이 자체는 유효한 Windows 경로이고, 실제 사용자가 Docker
+            와 native 를 혼용하는 환경에서는 이미 해당 위치에 파일을 쌓아
+            둔 경우가 많다. 따라서 fallback 으로 `~/Downloads` 같은 다른
+            위치로 바꾸지 않는다 — 기존 파일과의 정합성이 깨지기 때문.
+            대신 `Path.resolve()` 로 Windows 절대경로 포맷으로 변환하고
+            최초 한 번 경고 로그만 남긴다.
         """
         raw = cls.DOWNLOAD_DIR
         if not raw:
@@ -159,17 +161,21 @@ class Config:
             and (raw.startswith("/") or raw.startswith("\\"))
             and not _is_docker_with_data_volume()
         ):
-            fallback = _default_download_dir()
+            # Windows 에서 unix 스타일 절대경로는 현재 CWD 의 드라이브 루트로
+            # 해석된다. 명시적으로 resolve 해서 이후 파일시스템 비교가 일관되도록.
+            resolved = str(Path(raw).resolve())
             if not cls._drive_root_trap_warned:
                 import logging as _logging
 
                 _logging.getLogger(__name__).warning(
-                    "DOWNLOAD_DIR=%r 은 Docker 절대경로 — Windows 네이티브 실행으로 감지되어 "
-                    "drive-root 트랩 방지 위해 %r 로 fallback",
-                    raw, fallback,
+                    "DOWNLOAD_DIR=%r 은 Docker unix 절대경로 — Windows 네이티브에서는 "
+                    "드라이브 루트 %r 로 해석됩니다. 의도한 위치가 맞는지 확인하세요. "
+                    "다른 곳에 저장하려면 `.env` DOWNLOAD_DIR 을 Windows 경로(예: "
+                    "`C:/Users/...`)로 수정하세요.",
+                    raw, resolved,
                 )
                 cls._drive_root_trap_warned = True
-            return fallback
+            return resolved
         return raw
 
     # Windows drive-root trap 경고 중복 방지 플래그

@@ -260,15 +260,17 @@ def test_reconcile_no_op_when_store_already_correct(tmp_path: Path):
 # ── Config Windows /data 드라이브 루트 트랩 ───────────────────
 
 
-def test_config_windows_drive_root_trap_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """Windows + 절대 unix 경로 DOWNLOAD_DIR + Docker 아님 → default fallback.
+def test_config_windows_drive_root_trap_resolves_not_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    """Windows + unix 절대경로 DOWNLOAD_DIR + Docker 아님 → Path.resolve() 결과 유지.
 
-    실제 sys.platform 을 바꾸는 건 불가능하므로 Config._drive_root_trap_warned 와
-    _is_docker_with_data_volume 를 조합해 로직만 검증.
+    기존 구현은 `~/Downloads` 로 fallback 했으나, 사용자가 이미 해당 경로에
+    파일을 쌓아둔 경우(예: D:/data/downloads) 정합성이 깨지므로 fallback 대신
+    resolve 만 수행하고 경고를 남기는 것이 올바른 동작.
     """
     from src import config as config_module
 
-    # 기존 상태 백업
     original_dir = config_module.Config.DOWNLOAD_DIR
     original_warned = config_module.Config._drive_root_trap_warned
     original_platform = getattr(config_module.sys, "platform", "")
@@ -282,9 +284,16 @@ def test_config_windows_drive_root_trap_fallback(monkeypatch: pytest.MonkeyPatch
         )
 
         result = config_module.Config.get_download_dir()
-        # fallback 은 Path.home()/Downloads 이거나 /data/downloads 가 아니어야 함
-        assert result != "/data/downloads"
+        # 경고 플래그는 켜져야 하지만, 경로는 fallback 이 아닌 Path.resolve() 결과
         assert config_module.Config._drive_root_trap_warned is True
+        # Path("/data/downloads").resolve() 는 현재 드라이브 루트 기반 절대경로
+        # (e.g. 'D:\\data\\downloads' 또는 'C:\\data\\downloads' — OS별 차이)
+        # raw 그대로가 아닌 OS 절대경로여야 하고, "data" 와 "downloads" 를 포함해야 함
+        assert "data" in result.lower() and "downloads" in result.lower()
+        # fallback 된 경우라면 Downloads 폴더 등 다른 경로가 나오는데 그 차단 확인:
+        # Path("/data/downloads").resolve() 는 Linux 에서도 "/data/downloads" 그대로.
+        # Windows 에서만 드라이브 루트 접두어 추가된 형태.
+        assert result != "/data/downloads" or "\\" in result or ":" in result
     finally:
         config_module.Config.DOWNLOAD_DIR = original_dir
         config_module.Config._drive_root_trap_warned = original_warned
