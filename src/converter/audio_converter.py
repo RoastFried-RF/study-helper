@@ -4,11 +4,12 @@ mp4 → mp3 변환.
 ffmpeg를 subprocess로 호출하여 영상에서 오디오를 추출한다.
 """
 
-import logging
 import subprocess
 from pathlib import Path
 
-_log = logging.getLogger(__name__)
+from src.logger import get_logger
+
+_log = get_logger("converter")
 
 
 def convert_to_mp3(mp4_path: Path, mp3_path: Path | None = None, overwrite: bool = False) -> Path:

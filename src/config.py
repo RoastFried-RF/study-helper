@@ -175,9 +175,9 @@ class Config:
                 remapped = project_root / "data" / rel
             resolved = str(remapped.resolve())
             if not cls._drive_root_trap_warned:
-                import logging as _logging
+                from src.logger import get_logger
 
-                _logging.getLogger(__name__).warning(
+                get_logger("config").warning(
                     "DOWNLOAD_DIR=%r 은 Docker unix 절대경로 — Windows 네이티브에서는 "
                     "프로젝트 루트 기반 %r 로 매핑됩니다. 다른 위치를 원하시면 "
                     "`.env` 의 DOWNLOAD_DIR 을 Windows 경로 (예: "

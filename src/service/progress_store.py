@@ -27,14 +27,14 @@ v1 → v2 자동 마이그레이션은 load 시점에 수행된다.
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from src.config import KST
+from src.logger import get_logger
 
-_log = logging.getLogger(__name__)
+_log = get_logger("service.progress_store")
 
 
 @dataclass

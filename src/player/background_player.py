@@ -929,8 +929,9 @@ async def play_lecture(
                 log("[cleanup] page.unroute('**/*.mp4') 성공")
             except Exception as _unroute_e:
                 log(f"[cleanup] page.unroute 실패 — 다음 다운로드에 fake webm 누출 가능: {_unroute_e}")
-                import logging as _pl_logging
-                _pl_logging.getLogger(__name__).error(
+                from src.logger import get_logger
+
+                get_logger("player.background").error(
                     "page.unroute('**/*.mp4') 실패 — 다운로드 단계에서 fake webm 가능: %s", _unroute_e,
                 )
         # 더미 영상 바이트 즉시 해제

@@ -6,11 +6,12 @@ wav 중간 파일은 생성하지 않는다.
 """
 
 import gc
-import logging
 import threading
 from pathlib import Path
 
-_log = logging.getLogger(__name__)
+from src.logger import get_logger
+
+_log = get_logger("stt")
 
 # 모델 싱글톤 캐시: 동일 크기 모델은 재사용, 다른 크기 요청 시 기존 해제
 _model_cache: dict = {}

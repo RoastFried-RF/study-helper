@@ -6,7 +6,6 @@ requests로 청크 스트리밍 다운로드한다.
 """
 
 import asyncio
-import logging
 import re
 import time
 from collections.abc import Callable
@@ -29,9 +28,10 @@ from src.downloader.result import (
     SSRFBlockedError,
     SuspiciousStubError,
 )
+from src.logger import get_logger
 from src.player.background_player import click_play, dismiss_dialog, find_player_frame
 
-_dl_log = logging.getLogger(__name__)
+_dl_log = get_logger("downloader")
 
 _MAX_RETRIES = 3
 _TIMEOUT = (10, 60)  # (connect, read) seconds

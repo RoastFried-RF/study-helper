@@ -8,14 +8,15 @@ Telegram 은 본문을 plain text 로 해석한다 → 강의명에 `<`, `*`, `_
 섞여도 마크업으로 재해석되지 않는다.
 """
 
-import logging
 import re
 import time
 from pathlib import Path
 
 import requests
 
-_log = logging.getLogger(__name__)
+from src.logger import get_logger
+
+_log = get_logger("notifier.telegram")
 
 # Telegram 메시지 최대 길이 (API 명세)
 _TELEGRAM_MAX_MESSAGE_LEN = 4096
