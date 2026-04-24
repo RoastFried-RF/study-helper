@@ -301,13 +301,19 @@ class CourseScraper:
         self._log(f"강의 목록 로딩: {course.long_name}")
         await page.goto(course.lectures_url, wait_until="networkidle")
 
-        # 세션 만료 시 재로그인 (병렬 실행 시 lock + 플래그로 중복 방지)
+        # 세션 만료 시 재로그인 (병렬 실행 시 lock + 플래그로 중복 방지).
+        # LOG-010: 이전에는 재로그인 실패 시 _session_restored 가 False 로 남아
+        # 대기 중이던 다른 task 들이 각자 재로그인을 다시 시도하는 경합이 있었다.
+        # 성공 시에만 flag 를 True 로 올리고, 이미 True 면 후속 task 는 재시도 없이
+        # 쿠키 공유만 신뢰하여 page.goto 한 번으로 정리한다.
         if "login" in page.url:
             async with self._login_lock:
                 if not self._session_restored:
                     self._log("세션 만료 감지 — 자동 재로그인 중...")
                     ok = await ensure_logged_in(page, self.username, self.password)
                     if not ok:
+                        # flag 는 여전히 False — 다음 사이클에서 재시도 가능.
+                        # 다만 현재 호출은 실패로 명확히 종료.
                         raise RuntimeError("자동 재로그인 실패. 학번/비밀번호를 확인하세요.")
                     self._log("재로그인 완료")
                     self._session_restored = True
