@@ -215,9 +215,10 @@ async def _create_fake_webm(duration_sec: float) -> bytes:
     """
     import os
     import tempfile
+    from pathlib import Path as _Path
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = os.path.join(tmpdir, "fake.webm")
+        output_path = _Path(tmpdir) / "fake.webm"
         dur = str(int(duration_sec) + 2)
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg",
@@ -244,17 +245,16 @@ async def _create_fake_webm(duration_sec: float) -> bytes:
             "0:v",
             "-map",
             "1:a",
-            output_path,
+            str(output_path),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
             # SEC-010: subprocess 에 민감 env 상속 차단 — PATH 만 전달.
             env={"PATH": os.environ.get("PATH", "")},
         )
         await proc.communicate()
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        if not output_path.exists() or output_path.stat().st_size == 0:
             raise RuntimeError("ffmpeg 더미 영상 생성 실패")
-        with open(output_path, "rb") as f:
-            return f.read()
+        return output_path.read_bytes()
 
 
 # ── 진도 API 직접 호출 (Plan B) ──────────────────────────────────

@@ -344,8 +344,6 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
                 diagnostics=diag,
             )
 
-        # print(f"  [DBG] player frame 발견: {player_frame.url[:80]}")
-
         # 이어보기 다이얼로그 처리 후 재생 버튼 클릭
         await asyncio.sleep(_DIALOG_SETTLE_SEC)
         await dismiss_dialog(player_frame, restart=True)
@@ -369,10 +367,6 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
 
             # Plan A: 모든 commons frame에서 video 태그 src 확인 (재생 후 새 frame 포함)
             commons_frames = [f for f in page.frames if "commons.ssu.ac.kr" in f.url]
-            # if i % 10 == 0:
-            #     print(f"  [DBG] 폴링({i}): commons frame 수={len(commons_frames)}")
-            #     for fi, f in enumerate(commons_frames):
-            #         print(f"  [DBG]   commons[{fi}]: {f.url[:80]}")
 
             for frame in commons_frames:
                 try:
@@ -399,40 +393,9 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
                         _dl_log.info("URL 추출 성공 (Plan A fallback): %s", result[:120])
                         return ExtractionResult(url=result, diagnostics=_diagnostics())
                 except Exception:
-                    pass  # if i % 10 == 0: print(f"  [DBG]   video 평가 오류: {e}")
+                    pass
 
             await asyncio.sleep(_POLL_INTERVAL_SEC)
-
-        # 폴링 종료 (60초) — 아래 디버그 코드는 URL 추출 실패 시 원인 분석용
-        # print("  [DBG] 60초 폴링 종료. player 설정 파일 분석...")
-
-        # async def _fetch_text(url: str) -> str:
-        #     try:
-        #         resp = await page.request.get(url)
-        #         if resp.status != 200:
-        #             return ""
-        #         raw = await resp.body()
-        #         for enc in ("utf-8", "euc-kr", "cp949", "latin-1"):
-        #             try:
-        #                 return raw.decode(enc)
-        #             except Exception:
-        #                 continue
-        #         return raw.decode("latin-1")
-        #     except Exception as e:
-        #         print(f"  [DBG] fetch 오류 {url}: {e}")
-        #         return ""
-
-        # uni-player.min.js — m3u8/HLS URL 조합 로직 분석
-        # import re as _re
-        # player_js_url = next((u for u in all_requests if "uni-player.min.js" in u), None)
-        # if player_js_url:
-        #     print(f"  [DBG] uni-player.min.js fetch 중...")
-        #     text = await _fetch_text(player_js_url)
-        #     print(f"  [DBG] uni-player.min.js 크기: {len(text)} bytes")
-        #     matches = _re.findall(r'.{0,150}(?:m3u8|\.m3u|hls(?:Url|Path|Src)|readystream|stream_url|streamUrl|videoSrc|mediaSrc|contentUri|content_uri|upf|ssmovie).{0,150}', text)
-        #     print(f"  [DBG] uni-player.min.js 관련 키워드 ({len(matches)}개):")
-        #     for m in matches[:40]:
-        #         print(f"  [DBG]   {m.strip()[:300]}")
 
         # 폴링 종료 후 성공한 경우
         if captured["url"]:

@@ -90,11 +90,13 @@ def _find_free_port(preferred: int, host: str = "127.0.0.1", max_tries: int = 10
 
 def main():
     """API 서버를 실행한다."""
+    from src.logger import get_logger
+
     preferred_port = int(os.getenv("STUDY_HELPER_API_PORT", "18090"))
     port = _find_free_port(preferred_port)
     if port != preferred_port:
         # Electron 로그에 포트 이관 사실을 표기해 연동 클라이언트가 감지 가능하게 한다.
-        print(f"[study-helper] port {preferred_port} busy; using {port}", flush=True)
+        get_logger("api.server").warning("port %d busy; using %d", preferred_port, port)
     uvicorn.run(
         "src.api.server:app",
         host="127.0.0.1",
