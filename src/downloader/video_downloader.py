@@ -6,6 +6,7 @@ requests로 청크 스트리밍 다운로드한다.
 """
 
 import asyncio
+import contextlib
 import re
 from collections.abc import Callable
 from http.client import IncompleteRead
@@ -438,6 +439,14 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
             _extracted_host = urlparse(captured["url"]).hostname or "?"
             _dl_log.info("URL 추출 성공 — host=%s path=%s", _extracted_host, urlparse(captured["url"]).path[:120])
             return ExtractionResult(url=captured["url"], diagnostics=_diagnostics())
+
+        # LOG-006: _parse_content_php 가 fire-and-forget 로 돌고 있어 _diagnostics()
+        # 호출 시점에 _content_php_parse_error 가 아직 세팅 안 된 경쟁 상태가 가능.
+        # 실패 진단에 들어가기 직전에 background task 가 done 이면 await 하여
+        # parse_error 상태 반영을 보장. (이미 끝났으면 즉시 리턴)
+        if _bg_task is not None and _bg_task.done():
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await _bg_task
 
         # 실패 — sub-reason 판정 우선순위:
         # 1) HLS 스트림만 관측 → HLS_ONLY (다운로더 미지원 알림)
