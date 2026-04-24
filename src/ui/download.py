@@ -18,7 +18,6 @@ from rich.progress import (
     Progress,
     SpinnerColumn,
     TextColumn,
-    TimeElapsedColumn,
     TransferSpeedColumn,
 )
 from rich.text import Text
@@ -60,7 +59,6 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
     Returns:
         DownloadResult: ok=True면 mp4 다운로드까지 완료. 실패 시 reason에 분류된 사유가 담김.
     """
-    from src.converter.audio_converter import convert_to_mp3
     from src.downloader.video_downloader import (
         download_video_with_browser,
         extract_video_url_detailed,
@@ -209,139 +207,79 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
             reason = REASON_UNKNOWN
         return DownloadResult(ok=False, reason=reason)
 
-    # 5. mp3 변환 (audio_only 또는 both)
-    mp3_path: Path | None = None
-    if audio_only or both:
-        console.print()
-        console.print("  [dim]mp3 변환 중...[/dim]")
-        try:
-            mp3_path = convert_to_mp3(mp4_path)
-            if audio_only:
-                mp4_path.unlink()  # 음성 전용: 원본 mp4 삭제
-        except Exception as e:
-            console.print(f"  [bold red]mp3 변환 실패:[/bold red] {e}")
-            return DownloadResult(ok=False, reason=REASON_MP3_FAILED, mp4_path=mp4_path)
+    # 5-8. 후속 파이프라인 (mp3 변환 → STT → AI 요약 → 텔레그램 알림)
+    # ARCH-001: TUI 와 WS(/download/pipeline) 가 동일한 run_pipeline 을 호출.
+    # LOG-013/LOG-014: run_pipeline 은 내부에서 blocking(convert_to_mp3, transcribe,
+    # summarize) 을 run_in_executor 로 위임하므로 이벤트 루프 block 이 해소된다.
+    from src.service.download_pipeline import PipelineStage, run_pipeline
 
-        console.print()
-        console.print("  [bold green]다운로드 완료![/bold green]")
-        if both:
-            console.print(f"  [dim]{mp4_path}[/dim]")
-        console.print(f"  [dim]{mp3_path}[/dim]")
-    else:
-        console.print()
-        console.print("  [bold green]다운로드 완료![/bold green]")
-        console.print(f"  [dim]{mp4_path}[/dim]")
-
-    # 6. STT 변환 (mp3가 있고 STT_ENABLED=true인 경우)
-    txt_path = None
-    if mp3_path and Config.STT_ENABLED == "true":
-        console.print()
-        console.print("  [dim]STT 변환 중... (시간이 걸릴 수 있습니다)[/dim]")
-        try:
-            from src.stt.transcriber import transcribe, unload_model
-
-            txt_path = transcribe(
-                mp3_path,
-                model_size=Config.WHISPER_MODEL or "base",
-                language=Config.STT_LANGUAGE,
-            )
-            console.print("  [bold green]STT 완료![/bold green]")
-            console.print(f"  [dim]{txt_path}[/dim]")
-        except Exception as e:
-            console.print(f"  [bold red]STT 실패:[/bold red] {e}")
-        finally:
-            try:
-                unload_model()
-            except Exception:
-                pass
-
-    # 7. AI 요약 (txt가 있고 AI_ENABLED=true인 경우)
-    summary_path = None
-    if txt_path and Config.AI_ENABLED == "true":
-        # B4: STT 결과가 비어 있으면 요약 호출 생략
-        from src.stt.transcriber import is_transcript_usable
-
-        if not is_transcript_usable(txt_path):
-            console.print("  [yellow]AI 요약 건너뜀: STT 결과가 비어 있습니다 (무음/저음량 영상 가능).[/yellow]")
-        else:
-            api_key = Config.GOOGLE_API_KEY if Config.AI_AGENT == "gemini" else Config.OPENAI_API_KEY
-            model = Config.GEMINI_MODEL if Config.AI_AGENT == "gemini" else ""
-            if not api_key:
-                console.print("  [yellow]AI 요약 건너뜀: API 키가 설정되지 않았습니다.[/yellow]")
-            else:
-                import warnings
-
-                from src.summarizer.summarizer import GEMINI_DEFAULT_MODEL, summarize
-
+    def _on_progress(p) -> None:
+        """run_pipeline 의 stage 전이를 Rich console 로 렌더."""
+        if p.progress == 0.0:
+            if p.stage == PipelineStage.CONVERT:
                 console.print()
-                spinner_progress = Progress(
-                    SpinnerColumn(),
-                    TextColumn("  [bold]{task.description}"),
-                    TimeElapsedColumn(),
-                    console=console,
-                    expand=False,
-                )
-                task_id = spinner_progress.add_task("AI 요약 중...", total=None)
+                console.print("  [dim]mp3 변환 중...[/dim]")
+            elif p.stage == PipelineStage.TRANSCRIBE:
+                console.print()
+                console.print("  [dim]STT 변환 중... (시간이 걸릴 수 있습니다)[/dim]")
+            elif p.stage == PipelineStage.SUMMARIZE:
+                console.print()
+                console.print("  [dim]AI 요약 중...[/dim]")
+            elif p.stage == PipelineStage.NOTIFY:
+                console.print()
+                console.print("  [dim]텔레그램으로 요약 전송 중...[/dim]")
+        elif p.progress == 1.0 and p.message:
+            console.print(f"  [green]{p.message}[/green]")
 
-                try:
-                    with Live(spinner_progress, console=console, refresh_per_second=8):
-                        with warnings.catch_warnings():
-                            warnings.simplefilter("ignore")
-                            loop = asyncio.get_running_loop()
-                            summary_path = await loop.run_in_executor(
-                                None,
-                                lambda: summarize(
-                                    txt_path,
-                                    agent=Config.AI_AGENT or "gemini",
-                                    api_key=api_key,
-                                    model=model or GEMINI_DEFAULT_MODEL,
-                                    extra_prompt=Config.SUMMARY_PROMPT_EXTRA,
-                                ),
-                            )
-                    console.print("  [bold green]AI 요약 완료![/bold green]")
-                    console.print(f"  [dim]{summary_path}[/dim]")
-                except Exception as e:
-                    console.print(f"  [bold red]AI 요약 실패:[/bold red] {e}")
+    tg = Config.get_telegram_credentials()
+    ai_agent = Config.AI_AGENT or "gemini"
+    pipe_result = await run_pipeline(
+        mp4_path=mp4_path,
+        course_name=course.long_name,
+        week_label=lec.week_label,
+        lecture_title=lec.title,
+        audio_only=audio_only,
+        both=both,
+        stt_enabled=Config.STT_ENABLED == "true",
+        stt_model=Config.WHISPER_MODEL or "base",
+        stt_language=Config.STT_LANGUAGE,
+        ai_enabled=Config.AI_ENABLED == "true",
+        ai_agent=ai_agent,
+        ai_api_key=Config.GOOGLE_API_KEY if ai_agent == "gemini" else Config.OPENAI_API_KEY,
+        ai_model=Config.GEMINI_MODEL if ai_agent == "gemini" else "",
+        ai_extra_prompt=Config.SUMMARY_PROMPT_EXTRA,
+        tg_token=tg[0] if tg and Config.TELEGRAM_ENABLED == "true" else "",
+        tg_chat_id=tg[1] if tg and Config.TELEGRAM_ENABLED == "true" else "",
+        tg_auto_delete=Config.TELEGRAM_AUTO_DELETE == "true",
+        on_progress=_on_progress,
+    )
 
-    # 8. 텔레그램 알림 (AI 요약 완료 시)
-    if summary_path and Config.TELEGRAM_ENABLED == "true":
-        tg_token = Config.TELEGRAM_BOT_TOKEN
-        tg_chat_id = Config.TELEGRAM_CHAT_ID
-        if tg_token and tg_chat_id:
-            from src.notifier.telegram_notifier import notify_summary_complete, notify_summary_send_error
+    if not pipe_result.success and pipe_result.error == "CONVERT_FAILED":
+        console.print(f"  [bold red]mp3 변환 실패:[/bold red] {pipe_result.stage_errors.get('convert', '')}")
+        return DownloadResult(ok=False, reason=REASON_MP3_FAILED, mp4_path=mp4_path)
 
-            console.print()
-            console.print("  [dim]텔레그램으로 요약 전송 중...[/dim]")
-
-            summary_text = summary_path.read_text(encoding="utf-8").strip()
-
-            # 자동 삭제 대상 파일 목록
-            files_to_delete = None
-            if Config.TELEGRAM_AUTO_DELETE == "true":
-                files_to_delete = [f for f in [mp4_path, mp3_path, txt_path, summary_path] if f]
-
-            ok = notify_summary_complete(
-                bot_token=tg_token,
-                chat_id=tg_chat_id,
-                course_name=course.long_name,
-                week_label=lec.week_label,
-                lecture_title=lec.title,
-                summary_text=summary_text,
-                summary_path=summary_path,
-                auto_delete_files=files_to_delete,
-            )
-            if ok:
-                console.print("  [bold green]텔레그램 전송 완료![/bold green]")
-                if files_to_delete:
-                    console.print("  [dim]파일이 자동 삭제되었습니다.[/dim]")
-            else:
-                console.print("  [yellow]텔레그램 전송 실패. 파일은 유지됩니다.[/yellow]")
-                notify_summary_send_error(tg_token, tg_chat_id, course.long_name, lec.week_label, lec.title)
+    # 최종 결과 요약
+    console.print()
+    console.print("  [bold green]다운로드 완료![/bold green]")
+    if pipe_result.mp4_path:
+        console.print(f"  [dim]{pipe_result.mp4_path}[/dim]")
+    if pipe_result.mp3_path:
+        console.print(f"  [dim]{pipe_result.mp3_path}[/dim]")
+    if pipe_result.txt_path:
+        console.print(f"  [dim]{pipe_result.txt_path}[/dim]")
+    if pipe_result.summary_path:
+        console.print(f"  [dim]{pipe_result.summary_path}[/dim]")
+    if "transcribe" in pipe_result.stage_errors:
+        console.print(f"  [bold red]STT 실패:[/bold red] {pipe_result.stage_errors['transcribe']}")
+    if "summarize" in pipe_result.stage_errors:
+        console.print(f"  [yellow]AI 요약:[/yellow] {pipe_result.stage_errors['summarize']}")
+    if "notify" in pipe_result.stage_errors:
+        console.print(f"  [yellow]텔레그램:[/yellow] {pipe_result.stage_errors['notify']}")
 
     return DownloadResult(
         ok=True,
-        mp4_path=mp4_path if mp4_path.exists() else None,
-        mp3_path=mp3_path,
-        txt_path=txt_path,
-        summary_path=summary_path,
+        mp4_path=pipe_result.mp4_path if pipe_result.mp4_path and pipe_result.mp4_path.exists() else None,
+        mp3_path=pipe_result.mp3_path,
+        txt_path=pipe_result.txt_path,
+        summary_path=pipe_result.summary_path,
     )
