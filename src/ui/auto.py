@@ -173,11 +173,6 @@ def _is_file_present(course: "Course", lec: "LectureItem", rule: str) -> bool:
     return file_present(Config.get_download_dir(), course.long_name, lec, rule)
 
 
-def _check_auto_prerequisites() -> list[str]:
-    """자동 모드 필수 조건을 확인하고 미충족 항목 목록을 반환한다."""
-    return check_auto_prerequisites(Config)
-
-
 def _configure_schedule() -> list[int]:
     """
     스케줄 설정 UI를 표시하고 선택된 시각 목록을 반환한다.
@@ -217,7 +212,7 @@ async def run_auto_mode(
     console.clear()
 
     # ── 필수 조건 체크 ────────────────────────────────────────────
-    issues = _check_auto_prerequisites()
+    issues = check_auto_prerequisites(Config)
     if issues:
         console.print(header_panel("자동 모드"))
         console.print()
