@@ -242,13 +242,20 @@ def notify_summary_complete(
     header = f"[알림] {label}의 요약 내용을 다음과 같이 제공해드립니다.\n\n"
     text = header + summary_text
 
-    # 요약 내용 텍스트 메시지 전송 (4096자 초과 시 순차 전송, 실패해도 나머지 계속)
+    # LOG-011: 요약 내용 텍스트를 4096자 청크로 분할 전송.
+    # 중간 청크 실패 시 남은 청크를 계속 보내면 사용자에게 잘린 요약이 도착한다.
+    # 첫 실패에서 즉시 break 하고 첨부 파일(요약 전문) 전송으로 복구한다.
+    # 여러 청크인 경우 사용자가 손실을 인지할 수 있도록 순서 마커 "(n/N)" 부여.
+    chunks = [text[i : i + _TELEGRAM_MAX_MESSAGE_LEN] for i in range(0, len(text), _TELEGRAM_MAX_MESSAGE_LEN)]
+    total_chunks = len(chunks)
     msg_ok = True
-    for i in range(0, len(text), _TELEGRAM_MAX_MESSAGE_LEN):
-        if not _send_message(bot_token, chat_id, text[i : i + _TELEGRAM_MAX_MESSAGE_LEN]):
+    for idx, chunk in enumerate(chunks, start=1):
+        marked = f"({idx}/{total_chunks}) {chunk}" if total_chunks > 1 else chunk
+        if not _send_message(bot_token, chat_id, marked):
             msg_ok = False
+            break  # 나머지 청크 전송 중단 — 잘린 요약 대신 첨부 파일로 복구 유도
 
-    # 요약 파일 첨부 전송
+    # 요약 파일 첨부 전송 — 청크 일부 실패해도 전문이 첨부되면 사용자 복구 가능
     file_ok = _send_document(bot_token, chat_id, summary_path, caption=f"{label} 요약 파일")
 
     success = msg_ok and file_ok
