@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -101,51 +100,21 @@ class ProgressStore:
     def save(self) -> None:
         """원자적으로 auto_progress.json을 교체한다.
 
-        SEC-005: 임시 파일을 `os.open(..., 0o600)`으로 생성해 POSIX umask와 관계없이
-        처음부터 소유자 전용 권한을 부여한다. `replace` 이후에도 동일 권한 유지.
-        Windows는 `os.open` mode가 제한적이지만 파일 핸들은 정상 생성됨.
+        ARCH-011: atomic_write_text 공용 모듈로 수렴 (O_EXCL + O_NOFOLLOW + 0o600 + fsync).
+        LOG-009: file_lock 으로 cross-process 직렬화. 자동 모드 + recover 스크립트
+        동시 실행 시 lost update 를 방지한다. POSIX(flock) 는 직렬화 보장,
+        Windows(msvcrt.locking) 는 best-effort advisory.
         """
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        from src.util.atomic_write import atomic_write_text, file_lock
+
         payload = {
             "version": 2,
             "entries": {url: asdict(entry) for url, entry in self.entries.items()},
         }
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
 
-        # SEC-102: O_EXCL로 기존 파일/심볼릭 링크 거부, POSIX에서는 O_NOFOLLOW로 심볼릭 링크
-        # follow 차단. 레이스/TOCTOU 공격으로 다른 파일이 truncate 되는 경로를 없앤다.
-        # 실행 재시도 대비해 사전에 stale tmp 정리.
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        fd = os.open(str(tmp), flags, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(serialized)
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except OSError:
-                    pass  # 일부 FS에서 fsync 미지원
-        except Exception:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
-        tmp.replace(self.path)
-        # POSIX: O_CREAT 시점에 이미 0o600. Windows: 아래 chmod는 noop이지만 try로 감쌈.
-        try:
-            self.path.chmod(0o600)
-        except OSError:
-            pass
+        with file_lock(self.path):
+            atomic_write_text(self.path, serialized, mode=0o600)
 
     # ── 조회 ─────────────────────────────────────────────────
     def get(self, url: str) -> ProgressEntry | None:
