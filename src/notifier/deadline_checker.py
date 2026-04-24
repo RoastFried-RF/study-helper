@@ -70,18 +70,19 @@ def _parse_lms_date(date_str: str, now: datetime | None = None) -> datetime | No
 
     if now is None:
         now = datetime.now(KST)
-    year = now.year
 
-    # 연도 전환기 보정
-    if now.month >= 11 and month <= 2:
-        year += 1
-    elif now.month <= 2 and month >= 11:
-        year -= 1
-
-    try:
-        return datetime(year, month, day, hour, minute, tzinfo=KST)
-    except ValueError:
+    # LOG-005: 연도 전환기 보정 — `월/일` 만 있는 문자열에 대해 now 와의 거리가
+    # 가장 가까운 연도를 선택한다. 기존의 `month<=2 / month>=11` 규칙은 12/31 ↔
+    # 1/1 경계에서 오판(이미 지난 날짜로 판정) 하던 버그가 있었다.
+    candidates: list[datetime] = []
+    for offset in (-1, 0, 1):
+        try:
+            candidates.append(datetime(now.year + offset, month, day, hour, minute, tzinfo=KST))
+        except ValueError:
+            continue
+    if not candidates:
         return None
+    return min(candidates, key=lambda d: abs((d - now).total_seconds()))
 
 
 def _make_dedup_key(course: Course, lecture: LectureItem, threshold: int) -> str:
