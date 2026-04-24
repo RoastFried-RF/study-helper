@@ -65,21 +65,30 @@ study-helper/
 │   │   ├── course_scraper.py         # 과목/주차/강의 스크래핑 (병렬 지원)
 │   │   └── models.py                 # Course, LectureItem, Week 등 데이터 모델
 │   ├── player/
-│   │   └── background_player.py      # 백그라운드 재생 (출석용)
+│   │   ├── background_player.py      # 백그라운드 재생 (출석용)
+│   │   └── fake_video.py             # Chromium H.264 우회용 VP8/WebM 더미 생성
 │   ├── downloader/
 │   │   └── video_downloader.py       # 영상 URL 추출 + HTTP 스트리밍 다운로드
 │   ├── converter/
 │   │   └── audio_converter.py        # mp4 → mp3 (ffmpeg)
 │   ├── stt/
-│   │   └── transcriber.py            # faster-whisper STT
+│   │   └── transcriber.py            # faster-whisper STT + safe_unload 헬퍼
 │   ├── summarizer/
 │   │   └── summarizer.py             # Gemini/OpenAI API 요약
 │   ├── notifier/
 │   │   ├── telegram_notifier.py      # 텔레그램 봇 알림
+│   │   ├── telegram_dispatch.py      # credential 가드 디스패처 (dispatch_if_configured)
 │   │   └── deadline_checker.py       # 마감 임박 알림 체크
 │   ├── service/                      # UI 독립 서비스 레이어 (Electron 연동)
 │   │   ├── download_pipeline.py      # 다운로드→변환→STT→요약→알림 파이프라인
-│   │   └── scheduler.py             # 스케줄 관리
+│   │   ├── download_state.py         # 다운로드 상태 추적
+│   │   ├── progress_store.py         # 자동 모드 진행 저장소 (원자 쓰기 + 파일락)
+│   │   ├── recover_pipeline.py       # 미완료 다운로드 재개
+│   │   └── scheduler.py              # 스케줄 관리
+│   ├── util/                         # 공용 유틸리티 (URL 정제, 로그 마스킹, 원자 쓰기)
+│   │   ├── atomic_write.py           # atomic_write_text + cross-process file_lock
+│   │   ├── log_sanitize.py           # PII/OAuth 마스킹 규칙
+│   │   └── url.py                    # safe_url (쿼리 제거)
 │   ├── api/                          # FastAPI 서버 (Electron 연동)
 │   │   ├── server.py                 # 앱 + 토큰 인증 + CORS
 │   │   └── routes/
@@ -88,11 +97,13 @@ study-helper/
 │   │       ├── download.py           # 변환/STT/요약 + WS 파이프라인
 │   │       └── notify.py             # 텔레그램 알림
 │   └── ui/                           # CUI 화면 (Rich TUI)
+│       ├── _widgets.py               # header_panel 공용 헤더 위젯
 │       ├── login.py
 │       ├── courses.py
 │       ├── player.py
 │       ├── download.py
 │       ├── auto.py                   # 자동 모드
+│       ├── recover.py                # 수동 복구
 │       └── settings.py
 └── data/
     └── downloads/                    # 과목명/N주차/강의명.mp4 구조
