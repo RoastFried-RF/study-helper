@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -53,8 +53,11 @@ class PipelineResult:
     stage_errors: dict[str, str] = field(default_factory=dict)
 
 
-# 콜백 타입: 동기/비동기 모두 지원 (_emit에서 isawaitable 체크)
-ProgressCallback = Callable[[PipelineProgress], None]  # sync or async
+# 콜백 타입: 동기(None 반환) 와 비동기(Awaitable 반환) 둘 다 수용.
+# _emit 내부에서 inspect.isawaitable 로 분기하여 await 여부를 결정한다.
+# ARCH-001: 이 시그니처가 TUI(Rich console) 와 API(WebSocket) 양쪽의
+# 단일 진입점. TUI 는 sync 콜백으로, WebSocket 은 async 콜백으로 사용.
+ProgressCallback = Callable[[PipelineProgress], None | Awaitable[None]]
 
 
 def resolve_download_path(
@@ -101,6 +104,10 @@ async def run_pipeline(
     on_progress: ProgressCallback | None = None,
 ) -> PipelineResult:
     """다운로드 후속 파이프라인 (변환 → STT → 요약 → 알림)을 실행한다.
+
+    ARCH-001: TUI(`ui/download.py::run_download`) 와 API(`/download/pipeline` WS)
+    양쪽의 단일 엔진. 호출자는 on_progress 콜백으로 단계별 진행 상태를 받고
+    자신의 표현 매체(Rich Panel / WebSocket JSON)로 렌더한다.
 
     mp4 파일이 이미 다운로드되어 있다고 가정한다.
     다운로드 자체는 Playwright/Electron 의존이므로 이 함수에 포함하지 않는다.
