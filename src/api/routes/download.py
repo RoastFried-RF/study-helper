@@ -145,8 +145,12 @@ async def pipeline_ws(ws: WebSocket):
     await ws.accept()
     pipeline_task: asyncio.Task | None = None
     try:
-        # WebSocket 토큰 인증 (첫 메시지) — 상수시간 비교
+        # WebSocket 토큰 인증 (첫 메시지) — 상수시간 비교.
+        # SEC-003: 토큰 미설정 시에도 fail-closed. STUDY_HELPER_API_ALLOW_NO_TOKEN=1
+        # 명시 플래그로만 우회 허용 (server.py 부팅 단계에서 이미 검증됨 — 여기 도달하면
+        # 토큰이 있거나 명시적 우회 모드 둘 중 하나).
         _api_token = os.getenv("STUDY_HELPER_API_TOKEN", "")
+        _allow_no_token = os.getenv("STUDY_HELPER_API_ALLOW_NO_TOKEN", "") == "1"
         if _api_token:
             auth_msg = await ws.receive_json()
             _client_token = auth_msg.get("token") or ""
@@ -154,6 +158,10 @@ async def pipeline_ws(ws: WebSocket):
                 await ws.send_json({"type": "error", "message": "인증 실패"})
                 await ws.close(code=4003)
                 return
+        elif not _allow_no_token:
+            # 방어적 중복 검증 — server.py 의 부팅 가드가 이미 걸렀어야 함.
+            await ws.close(code=4003)
+            return
 
         data = await ws.receive_json()
         req = PipelineRequest(**data)
