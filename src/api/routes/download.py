@@ -65,8 +65,12 @@ class ResolvePathRequest(BaseModel):
 
 
 @router.post("/resolve-path")
-def resolve_path(body: ResolvePathRequest):
-    """다운로드 경로를 결정한다."""
+async def resolve_path(body: ResolvePathRequest):
+    """다운로드 경로를 결정한다.
+
+    LOG-001: 순수 경로 계산이라 블로킹은 없으나 transcribe/summarize 와
+    동일하게 async def 로 통일해 핸들러 일관성을 유지한다.
+    """
     download_dir = Config.get_download_dir()
     result = resolve_download_path(download_dir, body.course_name, body.week_label, body.lecture_title)
     if result is None:
@@ -86,10 +90,15 @@ def _validate_path_in_download_dir(file_path: str) -> Path:
 
 
 @router.post("/convert")
-def convert(body: ConvertRequest):
-    """mp4를 mp3로 변환한다."""
+async def convert(body: ConvertRequest):
+    """mp4를 mp3로 변환한다.
+
+    LOG-001: ffmpeg subprocess 가 blocking 이므로 run_in_executor 로 위임해
+    이벤트 루프를 막지 않는다. transcribe/summarize 와 동일 패턴.
+    """
     mp4 = _validate_path_in_download_dir(body.mp4_path)
-    mp3_path = convert_to_mp3(mp4)
+    loop = asyncio.get_running_loop()
+    mp3_path = await loop.run_in_executor(None, lambda: convert_to_mp3(mp4))
     if body.delete_original:
         mp4.unlink(missing_ok=True)
     return {"mp3_path": str(mp3_path)}
