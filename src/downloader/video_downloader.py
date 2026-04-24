@@ -404,10 +404,13 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
             return ExtractionResult(url=captured["url"], diagnostics=_diagnostics())
 
         # LOG-006: _parse_content_php 가 fire-and-forget 로 돌고 있어 _diagnostics()
-        # 호출 시점에 _content_php_parse_error 가 아직 세팅 안 된 경쟁 상태가 가능.
-        # 실패 진단에 들어가기 직전에 background task 가 done 이면 await 하여
-        # parse_error 상태 반영을 보장. (이미 끝났으면 즉시 리턴)
-        if _bg_task is not None and _bg_task.done():
+        # 호출 시점에 _content_php_parse_error 가 아직 세팅 안 된 경쟁이 가능.
+        # done 이면 즉시 await, 아직 진행 중이면 최대 2초 대기해 parse_error 상태
+        # 반영을 보장. 2초 초과 시 timeout — 최악에도 snapshot 은 "진행 중" 을 명시.
+        if _bg_task is not None:
+            if not _bg_task.done():
+                with contextlib.suppress(TimeoutError, asyncio.CancelledError, Exception):
+                    await asyncio.wait_for(asyncio.shield(_bg_task), timeout=2.0)
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await _bg_task
 
@@ -517,7 +520,10 @@ def _stream_download(
 ) -> None:
     # LOG-012: Range 이어받기 로직 제거. 상위 재시도 루프가 매번 _remove_partial()
     # 을 호출하여 save_path 를 삭제하므로 이어받기가 성립할 조건 자체가 없었다.
-    # 실제로는 매번 처음부터 다시 다운로드하고 있었음. attempt 파라미터는 로깅용으로만 사용.
+    # 실제로는 매번 처음부터 다시 다운로드. attempt 는 진단 로그용.
+    _dl_log.info(
+        "다운로드 시도 %d/%d — path=%s", attempt, _MAX_RETRIES, save_path.name,
+    )
     headers: dict[str, str] = {"Referer": referer} if referer else {}
 
     response = requests.get(url, stream=True, timeout=_TIMEOUT, cookies=cookies, headers=headers)
