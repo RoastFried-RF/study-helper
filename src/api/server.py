@@ -52,7 +52,6 @@ def _verify_token(authorization: str | None = Header(default=None)):
 app = FastAPI(
     title="Study Helper API",
     version="1.0.0",
-    dependencies=[Depends(_verify_token)],
 )
 
 # CORS — localhost만 허용
@@ -64,10 +63,26 @@ app.add_middleware(
 )
 
 # ── 라우트 등록 ───────────────────────────────────────────────
+# health / version 은 공개 엔드포인트 — Docker HEALTHCHECK 와 외부 모니터링이 무인증
+# 호출한다. 나머지 라우터는 토큰 인증을 router-level dependency 로 명시 적용.
+# FastAPI global dependencies=[...] 는 모든 라우트에 상속되어 /health 도 보호되는
+# 부작용이 있어, router 단위로 옵트인하는 쪽이 명시적이다.
 app.include_router(health_routes.router, tags=["health"])
-app.include_router(config_routes.router, prefix="/config", tags=["config"])
-app.include_router(download_routes.router, prefix="/download", tags=["download"])
-app.include_router(notify_routes.router, prefix="/notify", tags=["notify"])
+app.include_router(
+    config_routes.router,
+    prefix="/config", tags=["config"],
+    dependencies=[Depends(_verify_token)],
+)
+app.include_router(
+    download_routes.router,
+    prefix="/download", tags=["download"],
+    dependencies=[Depends(_verify_token)],
+)
+app.include_router(
+    notify_routes.router,
+    prefix="/notify", tags=["notify"],
+    dependencies=[Depends(_verify_token)],
+)
 
 
 def _find_free_port(preferred: int, host: str = "127.0.0.1", max_tries: int = 10) -> int:
