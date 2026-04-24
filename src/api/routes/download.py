@@ -228,7 +228,9 @@ async def pipeline_ws(ws: WebSocket):
             except (asyncio.CancelledError, Exception):
                 pass
     except Exception as e:
-        _log.error("Pipeline WebSocket 오류: %s", e, exc_info=True)
+        # SEC-005: exc_info=True 는 frame locals (API 키/토큰) leak 경로이므로 제거.
+        # 타입명과 메시지만 로그에 남기고, 클라이언트에는 PIPELINE_ERROR 고정 코드만 반환.
+        _log.error("Pipeline WebSocket 오류: %s: %s", type(e).__name__, e, exc_info=False)
         if pipeline_task and not pipeline_task.done():
             pipeline_task.cancel()
             try:
@@ -236,7 +238,7 @@ async def pipeline_ws(ws: WebSocket):
             except (asyncio.CancelledError, Exception):
                 pass
         try:
-            await ws.send_json({"type": "error", "message": "파이프라인 실행 중 오류가 발생했습니다"})
+            await ws.send_json({"type": "error", "message": "PIPELINE_ERROR"})
             await ws.close()
         except Exception:
             pass
