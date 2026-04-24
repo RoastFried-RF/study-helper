@@ -229,8 +229,11 @@ async def run_pipeline(
     # ── 2. STT ───────────────────────────────────────────────────
     if result.mp3_path and stt_enabled:
         await _emit(PipelineStage.TRANSCRIBE, 0.0, "STT 변환 중...")
+        # LOG-002: loop 를 try 블록 바깥에서 선언. try 최상단에서 예외가 발생하면
+        # finally 의 loop.run_in_executor 에서 UnboundLocalError 가 원본 예외를
+        # 덮어쓴다. 여기서 선언하면 finally 진입 시 항상 유효한 값.
+        loop = asyncio.get_running_loop()
         try:
-            loop = asyncio.get_running_loop()
             result.txt_path = await loop.run_in_executor(
                 None,
                 lambda: transcribe_audio(result.mp3_path, model_size=stt_model, language=stt_language),
