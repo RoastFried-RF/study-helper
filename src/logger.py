@@ -1,11 +1,23 @@
 """
 로그 모듈.
 
-1. 앱 전역 로거 — 세션 단위 로그 파일 + 콘솔 출력
-2. 에러 전용 로거 — 개별 동작(play, download)별 에러 로그 (기존 호환)
+## API 선택 규약 (LOG-SYS-4)
 
-로그 파일: logs/study_helper_YYYYMMDD.log (일별 로테이션, 7일 보관)
-에러 파일: logs/YYYYMMDD_HHMMSS_<action>.log (기존 동작 유지)
+- **신규 코드는 `get_logger(이름)` 만 사용**하라. 앱 전역 로거 트리에 귀속되어
+  `logs/study_helper.log` 에 일별 로테이션 + 7일 보관으로 기록된다.
+- `get_error_logger("download"/"play")` 은 **기존 호환 경로** (deprecated).
+  특정 동작의 실패 컨텍스트를 독립 타임스탬프 파일로 남기는 기존 동작 유지용.
+  신규 호출은 추가하지 말 것. 기존 호출도 점진적으로 `get_logger` 로 이관 권장.
+
+## 보존 정책
+
+- `study_helper.log`: `TimedRotatingFileHandler(when="midnight", backupCount=7)` — 7일
+- `YYYYMMDD_HHMMSS_<action>.log`: LOG-SYS-2 에 따라 14일 초과 시 자동 삭제
+
+## 보안
+
+- LOG-SYS-3: 모든 로거에 `SensitiveFilter` 가 자동 부착되어 PII/OAuth/봇 토큰을 마스킹.
+- SEC-008: 새로 생성되는 로그 파일은 POSIX 에서 0o600 권한.
 """
 
 import logging
@@ -172,7 +184,12 @@ def _cleanup_stale_error_loggers(today: str) -> None:
 
 def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
     """
-    오류 기록용 파일 로거를 생성하거나 재사용한다. (기존 호환)
+    오류 기록용 파일 로거를 생성하거나 재사용한다.
+
+    .. deprecated:: LOG-SYS-4
+        신규 코드는 `get_logger(이름)` 을 사용하라. 본 함수는 기존 "download" /
+        "play" 호출 사이트 호환 유지용이다. 독립 타임스탬프 파일로 에러 컨텍스트를
+        남기는 기존 동작은 유지되며, 14일 초과 시 자동 정리된다 (LOG-SYS-2).
 
     같은 action + 같은 날짜의 호출은 기존 로거를 재사용하여
     핸들러/파일 디스크립터 누적을 방지한다.
