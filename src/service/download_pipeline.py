@@ -165,7 +165,10 @@ async def run_pipeline(
         try:
             from src.converter.audio_converter import convert_to_mp3
 
-            result.mp3_path = convert_to_mp3(mp4_path)
+            # H1: ffmpeg subprocess.run 은 blocking — run_in_executor 로 위임해
+            # 이벤트 루프 freeze 방지 (STT/요약과 동일 패턴, API 서버 전체 정지 해소).
+            loop = asyncio.get_running_loop()
+            result.mp3_path = await loop.run_in_executor(None, lambda: convert_to_mp3(mp4_path))
             if audio_only:
                 mp4_path.unlink(missing_ok=True)
                 result.mp4_path = None
@@ -244,17 +247,26 @@ async def run_pipeline(
         try:
             from src.notifier.telegram_notifier import notify_summary_complete
 
-            summary_text = result.summary_path.read_text(encoding="utf-8").strip()
-            ok = notify_summary_complete(
-                bot_token=tg_token,
-                chat_id=tg_chat_id,
-                course_name=course_name,
-                week_label=week_label,
-                lecture_title=lecture_title,
-                summary_text=summary_text,
-                summary_path=result.summary_path,
-                auto_delete_files=files_to_delete,
-            )
+            # H2: telegram HTTP(requests + time.sleep backoff + sendDocument)는 blocking.
+            # summary_path.read_text() 동기 디스크 읽기도 함께 executor 로 위임해
+            # 이벤트 루프 freeze 를 완전히 제거한다.
+            loop = asyncio.get_running_loop()
+            _summary_path = result.summary_path
+
+            def _read_and_notify() -> bool:
+                summary_text = _summary_path.read_text(encoding="utf-8").strip()
+                return notify_summary_complete(
+                    bot_token=tg_token,
+                    chat_id=tg_chat_id,
+                    course_name=course_name,
+                    week_label=week_label,
+                    lecture_title=lecture_title,
+                    summary_text=summary_text,
+                    summary_path=_summary_path,
+                    auto_delete_files=files_to_delete,
+                )
+
+            ok = await loop.run_in_executor(None, _read_and_notify)
             await _emit(PipelineStage.NOTIFY, 1.0, "전송 완료" if ok else "전송 실패")
             if not ok:
                 result.stage_errors["notify"] = "NOTIFY_FAILED"

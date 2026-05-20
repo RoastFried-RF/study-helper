@@ -487,10 +487,28 @@ async def download_video_with_browser(
         requests.exceptions.ConnectionError,
         requests.exceptions.Timeout,
     )
+
+    # H3: _stream_download 는 동기 requests.get(stream)+iter_content 라 blocking.
+    # asyncio.to_thread 로 워커 스레드에 위임해 이벤트 루프 freeze 를 막는다.
+    # on_progress 는 워커 스레드에서 호출되므로 loop.call_soon_threadsafe 로
+    # 이벤트 루프 스레드에 marshal — rich Progress 갱신의 thread-safety 보장.
+    loop = asyncio.get_running_loop()
+    thread_progress: Callable[[int, int], None] | None = None
+    if on_progress is not None:
+        _orig_progress = on_progress
+
+        def _thread_progress(downloaded: int, total: int) -> None:
+            loop.call_soon_threadsafe(_orig_progress, downloaded, total)
+
+        thread_progress = _thread_progress
+
     last_error: Exception | None = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            _stream_download(url, save_path, on_progress, attempt=attempt, cookies=cookies, referer=referer)
+            await asyncio.to_thread(
+                _stream_download, url, save_path, thread_progress,
+                attempt=attempt, cookies=cookies, referer=referer,
+            )
             return save_path.resolve()
         except _RETRYABLE as e:
             last_error = e

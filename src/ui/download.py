@@ -88,7 +88,9 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print("  [yellow]다운로드 불가:[/yellow] 이 강의는 다운로드가 지원되지 않는 형식입니다.")
         from src.notifier.telegram_notifier import notify_download_unsupported
 
-        dispatch_if_configured(
+        # M5: telegram dispatch 는 blocking — to_thread 로 위임 (error path 라도 freeze 방지)
+        await asyncio.to_thread(
+            dispatch_if_configured,
             notify_download_unsupported,
             course_name=course.long_name,
             week_label=lec.week_label,
@@ -149,7 +151,9 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
 
-        dispatch_if_configured(
+        # M5: telegram dispatch 는 blocking — to_thread 로 위임 (error path 라도 freeze 방지)
+        await asyncio.to_thread(
+            dispatch_if_configured,
             notify_download_error,
             course_name=course.long_name,
             week_label=lec.week_label,
@@ -231,7 +235,9 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print(f"  [dim]로그 저장: {log_path}[/dim]")
         from src.notifier.telegram_notifier import notify_download_error
 
-        dispatch_if_configured(
+        # M5: telegram dispatch 는 blocking — to_thread 로 위임 (error path 라도 freeze 방지)
+        await asyncio.to_thread(
+            dispatch_if_configured,
             notify_download_error,
             course_name=course.long_name,
             week_label=lec.week_label,
