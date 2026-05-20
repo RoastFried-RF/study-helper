@@ -127,19 +127,22 @@ def _load_or_create_key() -> bytes:
     return key
 
 
-# 의도적 캐시: 반복 호출 시 키 파일 I/O 절약. 프로세스 종료 시 자동 소멸.
+# L5: Fernet 객체 + key bytes 를 프로세스 캐시. 최초 1회만 keyring/파일 I/O 수행.
+# 키는 프로세스 수명 동안 불변(rotation 미지원)이므로 재로드하지 않는다.
+# 프로세스 종료 시 자동 소멸.
 _cached_fernet: Fernet | None = None
-_cached_fernet_key: bytes | None = None
 _cache_lock = threading.Lock()
 
 
 def _fernet() -> Fernet:
-    global _cached_fernet, _cached_fernet_key
+    global _cached_fernet
+    # fast path — 캐시 적중 시 lock·키 I/O 없음.
+    if _cached_fernet is not None:
+        return _cached_fernet
     with _cache_lock:
-        key = _load_or_create_key()
-        if _cached_fernet is None or _cached_fernet_key != key:
-            _cached_fernet = Fernet(key)
-            _cached_fernet_key = key
+        # double-checked locking — 경합 시 중복 생성 방지.
+        if _cached_fernet is None:
+            _cached_fernet = Fernet(_load_or_create_key())
         return _cached_fernet
 
 

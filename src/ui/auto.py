@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, NamedTuple
@@ -17,8 +18,9 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 # ARCH-010: 재시도 정책은 src.config.RetryPolicy 에서 단일 관리.
-from src.config import KST, Config, RetryPolicy as _RetryPolicy, get_data_path
-from src.downloader.paths import file_present
+from src.config import KST, Config, get_data_path
+from src.config import RetryPolicy as _RetryPolicy
+from src.downloader.paths import clear_course_dir_cache, file_present
 from src.downloader.result import (
     REASON_BROWSER_RESTARTED,
     REASON_PLAY_FAILED,
@@ -165,8 +167,21 @@ def _load_store() -> ProgressStore:
 
 
 def _save_store(store: ProgressStore) -> None:
+    """store 를 즉시 flush 한다 (phase 경계 / 사이클 종료용)."""
     try:
-        store.save()
+        store.flush()
+    except Exception as e:
+        _log.warning("auto_progress.json 저장 실패: %s", e)
+
+
+def _maybe_save_store(store: ProgressStore) -> None:
+    """M6: 배치 임계(PROGRESS_SAVE_INTERVAL) 도달 시에만 flush 한다.
+
+    강의별 루프에서 호출 — 매 강의 전체 직렬화(O(N²))를 N/INTERVAL 회로 줄인다.
+    사이클 종료 시 _save_store 가 강제 flush 하므로 잔여 delta 도 반드시 반영된다.
+    """
+    try:
+        store.maybe_flush()
     except Exception as e:
         _log.warning("auto_progress.json 저장 실패: %s", e)
 
@@ -249,20 +264,38 @@ async def run_auto_mode(
     async def _input_listener():
         """별도 태스크로 사용자 입력을 감시한다. '0' + Enter로 종료.
 
-        LOG-004: stdin 이 TTY 가 아닌 환경(e.g. 파이프/리다이렉션/Docker detach)
-        에서 readline 은 즉시 "" (EOF) 을 반환한다. 이 경우 while 루프가
-        CPU 100% 로 폭주하므로 EOF 즉시 break.
+        LOG-004: stdin 이 TTY 가 아닌 환경(파이프/리다이렉션/Docker detach)에서는
+        EOF 즉시 종료 — 루프 폭주 방지.
+
+        L3: stdin 읽기를 **반복마다 1회용 daemon 스레드**로 수행한다.
+        - daemon 스레드라 Ctrl+C 종료 시 `readline` 에 묶여도 인터프리터 atexit
+          join 을 막지 않는다(기존 비-데몬 ThreadPoolExecutor 의 hang 해소).
+        - `for line in sys.stdin` 영구 루프가 아니라 1라인 read 후 종료 — '0' 입력
+          으로 정상 종료하면 새 reader 를 띄우지 않으므로, 자동 모드 종료 후
+          메인 메뉴 입력을 가로채지 않는다. (영구 reader 스레드가 입력을 계속
+          소비하던 회귀 방지 — Codex 페어 리뷰 지적)
         """
         loop = asyncio.get_running_loop()
+
         while not stop_event.is_set():
-            try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-                if not line:  # EOF (non-TTY) — 루프 폭주 방지
-                    break
-                if line.strip() == "0":
-                    stop_event.set()
-                    break
-            except Exception:
+            fut: asyncio.Future[str] = loop.create_future()
+
+            def _read_one(target: asyncio.Future[str] = fut) -> None:
+                try:
+                    line = sys.stdin.readline()
+                except Exception:
+                    line = ""
+                # 이미 cancel 된 future 면 set 하지 않는다.
+                loop.call_soon_threadsafe(
+                    lambda: target.set_result(line) if not target.done() else None
+                )
+
+            threading.Thread(target=_read_one, daemon=True, name="stdin-read").start()
+            line = await fut  # task cancel 시 CancelledError 로 즉시 탈출
+            if not line:  # EOF (non-TTY) — 루프 폭주 방지
+                break
+            if line.strip() == "0":
+                stop_event.set()
                 break
 
     listener_task = asyncio.create_task(_input_listener())
@@ -307,6 +340,9 @@ async def run_auto_mode(
 
             console.print()
             cycle_count += 1
+            # M9: course_dir 해결 캐시를 사이클마다 무효화 — 사이클 중 새로 생성된
+            # 디렉토리/마커가 다음 사이클에 정확히 반영되도록.
+            clear_course_dir_cache()
             cycle_started_at = datetime.now(KST)
             now_str = cycle_started_at.strftime("%Y-%m-%d %H:%M:%S")
             _log.info("스케줄 체크 시작 (cycle %d)", cycle_count)
@@ -378,7 +414,15 @@ async def run_auto_mode(
             if tg:
                 from src.notifier.deadline_checker import check_and_notify_deadlines
 
-                dl_count = check_and_notify_deadlines(courses, details, token=tg[0], chat_id=tg[1])
+                # M5: deadline 체크는 다건 telegram sendMessage(blocking) — executor 위임
+                dl_count = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    # 기본인자로 loop 변수를 즉시 바인딩 (B023) — 사실상 즉시 await 라
+                    # stale 위험은 없으나 명시적으로 캡처.
+                    lambda c=courses, d=details, t=tg: check_and_notify_deadlines(
+                        c, d, token=t[0], chat_id=t[1]
+                    ),
+                )
                 if dl_count > 0:
                     console.print(f"  [yellow]마감 임박 항목 {dl_count}건 — 텔레그램 알림 전송[/yellow]")
 
@@ -503,7 +547,7 @@ async def run_auto_mode(
                             "강의 격리: 누적 재생 실패 임계 초과 — [%s] %s",
                             course.long_name, lec.title,
                         )
-                        _tg_quarantine_notify(course, lec)
+                        await _tg_quarantine_notify(course, lec)
 
                 # 통계 카운트 — BROWSER_RESTARTED 는 강의 자체 결함이 아니므로
                 # cycle_full_failed 와 별도로 카운트해 통계 노이즈를 분리.
@@ -514,7 +558,7 @@ async def run_auto_mode(
                 else:
                     cycle_full_failed += 1
 
-                _save_store(store)
+                _maybe_save_store(store)
 
             # ── 2단계: 재생 스킵 + 다운로드만 재시도 ────────────────
             for course, lec in dl_only_pending:
@@ -528,13 +572,16 @@ async def run_auto_mode(
                 else:
                     cycle_dl_failed += 1
 
-                _save_store(store)
+                _maybe_save_store(store)
 
             # ── 다운로드 누락 점검 (파일시스템 기준 재검증, CQS 분리) ─────
             _reconcile_store_with_filesystem(courses, details, store)
             _save_store(store)
             missing_entries = _list_missing_entries(courses, details)
-            _notify_download_gaps(missing_entries)
+            # M5: _notify_download_gaps 는 telegram sendMessage(blocking) — executor 위임
+            await asyncio.get_running_loop().run_in_executor(
+                None, _notify_download_gaps, missing_entries
+            )
 
             # STT 모델 메모리 해제 (다음 사이클까지 필요 없음)
             from src.stt.transcriber import safe_unload
@@ -643,7 +690,7 @@ async def _process_lecture(
 
     if not play_success:
         _log.warning("재생 최종 실패: %s — %s", label, last_err_msg)
-        _tg_error_notify(course, lec, f"{last_err_msg} ({_MAX_PLAY_RETRIES}회 재시도 후 실패)")
+        await _tg_error_notify(course, lec, f"{last_err_msg} ({_MAX_PLAY_RETRIES}회 재시도 후 실패)")
         return PlayResult(played=False, reason=REASON_PLAY_FAILED)
 
     lec.completion = "completed"
@@ -774,7 +821,7 @@ async def _run_download_step(
 
     # 모든 재시도 실패
     if last_exc_type:
-        _tg_error_notify(course, lec, f"다운로드 실패: {last_exc_type}")
+        await _tg_error_notify(course, lec, f"다운로드 실패: {last_exc_type}")
     return DownloadStepResult(ok=False, reason=last_reason, downloadable=True)
 
 
@@ -858,27 +905,34 @@ def _notify_download_gaps(missing: list[_MissingTuple]) -> None:
     dispatch_if_configured(notify_download_gaps, missing=missing)
 
 
-def _tg_error_notify(course: "Course", lec: "LectureItem", error_msg: str) -> None:
-    """자동 모드 처리 오류를 텔레그램으로 알린다."""
+async def _tg_error_notify(course: "Course", lec: "LectureItem", error_msg: str) -> None:
+    """자동 모드 처리 오류를 텔레그램으로 알린다.
+
+    M5: telegram HTTP(requests + backoff sleep)는 blocking 이므로 run_in_executor
+    로 위임해 자동 모드 이벤트 루프 freeze 를 막는다.
+    """
     from src.notifier.telegram_dispatch import dispatch_if_configured
     from src.notifier.telegram_notifier import notify_auto_error
 
-    dispatch_if_configured(
-        notify_auto_error,
-        course_name=course.long_name,
-        week_label=lec.week_label,
-        lecture_title=lec.title,
-        error_msg=error_msg,
+    await asyncio.get_running_loop().run_in_executor(
+        None,
+        lambda: dispatch_if_configured(
+            notify_auto_error,
+            course_name=course.long_name,
+            week_label=lec.week_label,
+            lecture_title=lec.title,
+            error_msg=error_msg,
+        ),
     )
 
 
-def _tg_quarantine_notify(course: "Course", lec: "LectureItem") -> None:
+async def _tg_quarantine_notify(course: "Course", lec: "LectureItem") -> None:
     """BUG-5: 누적 재생 실패 임계 초과로 강의가 격리됐음을 알린다.
 
     notify_auto_error 를 재사용 — 별도 알림 함수를 추가하지 않아 의존성을
     최소화한다. 사용자 화면에는 격리 사실 + 강의 정보만 전달.
     """
-    _tg_error_notify(
+    await _tg_error_notify(
         course, lec,
         "누적 재생 실패 임계 초과 — 자동 모드에서 격리되었습니다. LMS 측 강의 상태를 확인해 주세요.",
     )

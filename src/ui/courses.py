@@ -70,8 +70,11 @@ def _redraw_course_list(
 
     for i, (course, detail) in enumerate(zip(courses, details, strict=False), start=1):
         if detail is not None:
-            pending = detail.pending_video_count
-            total = detail.total_video_count
+            # L7: all_video_lectures 는 매 접근 리스트 재생성 property.
+            # 1회만 만들어 pending/total 을 함께 산출 (중복 재순회 제거).
+            videos = detail.all_video_lectures
+            total = len(videos)
+            pending = sum(1 for lec in videos if lec.needs_watch)
             if pending == 0:
                 watch_str = Text(f"{pending} / {total}", style="green")
             else:
@@ -174,8 +177,10 @@ def _render_week_list(course: Course, detail: CourseDetail) -> list[LectureItem]
     all_lectures: list[LectureItem] = []
 
     for week in video_weeks:
-        pending = week.pending_count
-        total = len(week.video_lectures)
+        # L7: video_lectures 는 매 접근 리스트 재생성 property — 주차당 1회만.
+        week_videos = week.video_lectures
+        pending = sum(1 for lec in week_videos if lec.needs_watch)
+        total = len(week_videos)
 
         if pending == 0:
             count_text = Text(f"  {pending} / {total}", style="green")
@@ -202,7 +207,7 @@ def _render_week_list(course: Course, detail: CourseDetail) -> list[LectureItem]
         table.add_column("기간", style="dim")
         table.add_column("길이", width=8, justify="right", style="dim")
 
-        for lec in week.video_lectures:
+        for lec in week_videos:
             all_lectures.append(lec)
             num = str(len(all_lectures))
 

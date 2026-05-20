@@ -13,6 +13,7 @@ LMS가 수강 완료로 인식하도록 실제 재생 시간을 유지한다.
 """
 
 import asyncio
+import contextlib
 import json
 import math
 import time
@@ -627,7 +628,12 @@ async def _play_via_progress_api(
         # 30초마다 진도 API 호출
         if current >= next_report or current >= duration:
             try:
-                cumulative_page = total_page if current >= duration else int(current / duration * total_page)
+                # L1: 영상 초반 구간에서 int(...) 가 0 을 산출하던 것을 max(1,...) 로 가드.
+                # 같은 계산의 fake-video 경로(_play_lecture_inner)는 이미 max(1, ceil(...)) 사용 — 일관성.
+                cumulative_page = (
+                    total_page if current >= duration
+                    else max(1, int(current / duration * total_page))
+                )
                 page_num = min(cumulative_page, total_page)
 
                 report_target, callback = _build_progress_url(
@@ -792,24 +798,32 @@ async def play_lecture(
             # 플레이어가 이 값을 보고 MP4 요청 없이 바로 flashErrorPage로 분기.
             # init script로 'probably'를 반환하게 속이면 MP4를 실제로 요청하고,
             # 그 요청을 위 route가 VP8 WebM으로 대체한다.
-            await page.add_init_script("""
-                (function() {
-                    if (window.__h264OverrideApplied) return;
-                    window.__h264OverrideApplied = true;
-                    if (window.MediaSource && MediaSource.isTypeSupported) {
-                        var _origMSE = MediaSource.isTypeSupported.bind(MediaSource);
-                        MediaSource.isTypeSupported = function(type) {
-                            if (type && (type.indexOf('avc') !== -1 || type.indexOf('mp4') !== -1)) return true;
-                            return _origMSE(type);
+            # L2: H.264 override init script 는 정적이라 1회 등록으로 충분.
+            # page 가 강의마다 재사용되므로 add_init_script 누적을 막기 위해 page 에
+            # 마커를 둔다 (JS 측 window.__h264OverrideApplied 가드와 별개로 driver
+            # 측 script 리스트 누적 자체를 차단). context 레벨 이동은 스크래핑 페이지
+            # 오염이라 회피.
+            if not getattr(page, "_h264_override_added", False):
+                await page.add_init_script("""
+                    (function() {
+                        if (window.__h264OverrideApplied) return;
+                        window.__h264OverrideApplied = true;
+                        if (window.MediaSource && MediaSource.isTypeSupported) {
+                            var _origMSE = MediaSource.isTypeSupported.bind(MediaSource);
+                            MediaSource.isTypeSupported = function(type) {
+                                if (type && (type.indexOf('avc') !== -1 || type.indexOf('mp4') !== -1)) return true;
+                                return _origMSE(type);
+                            };
+                        }
+                        var _origCPT = HTMLVideoElement.prototype.canPlayType;
+                        HTMLVideoElement.prototype.canPlayType = function(type) {
+                            if (type && (type.indexOf('mp4') !== -1 || type.indexOf('avc') !== -1 || type.indexOf('h264') !== -1)) return 'probably';
+                            return _origCPT.call(this, type);
                         };
-                    }
-                    var _origCPT = HTMLVideoElement.prototype.canPlayType;
-                    HTMLVideoElement.prototype.canPlayType = function(type) {
-                        if (type && (type.indexOf('mp4') !== -1 || type.indexOf('avc') !== -1 || type.indexOf('h264') !== -1)) return 'probably';
-                        return _origCPT.call(this, type);
-                    };
-                })();
-            """)
+                    })();
+                """)
+                with contextlib.suppress(Exception):
+                    page._h264_override_added = True
             _using_fake_video = True
             log("[0] MP4 인터셉트 (*.mp4 전체) + canPlayType 오버라이드 등록 완료")
         except Exception as e:
