@@ -6,6 +6,7 @@ wav 중간 파일은 생성하지 않는다.
 """
 
 import gc
+import os
 import threading
 from pathlib import Path
 
@@ -31,27 +32,87 @@ _MODEL_RAM_BUDGET_MB = {
 # 다운그레이드 우선순위 (큰 것 → 작은 것)
 _MODEL_FALLBACK_ORDER = ("large", "medium", "small", "base", "tiny")
 
+# M4: CTranslate2 cpu_threads 기본 상한. docker-compose 에 CPU 제한이 없어
+# 미지정 시 STT 가 호스트 전 코어를 포화시킨다.
+_DEFAULT_CPU_THREADS = 2
+
+
+def _resolve_cpu_threads() -> int:
+    """WHISPER_CPU_THREADS env 로 cpu_threads 상한 결정 (기본 2).
+
+    비정수/0 이하 같은 잘못된 값은 기본값으로 fallback.
+    """
+    raw = os.environ.get("WHISPER_CPU_THREADS", "").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return _DEFAULT_CPU_THREADS
+    return n if n > 0 else _DEFAULT_CPU_THREADS
+
+
+def _read_int(path: Path) -> int | None:
+    """cgroup 파일에서 정수를 읽는다. `max`/비정수/부재 시 None."""
+    try:
+        raw = path.read_text().strip()
+    except OSError:
+        return None
+    if raw == "max":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _cgroup_available_mb() -> int | None:
+    """컨테이너 cgroup 한도 기준 가용 메모리 (MB). cgroup 미설정/무제한 시 None.
+
+    M3: `_available_memory_mb` 가 호스트 RAM 만 보면 Docker `mem_limit` 안에서 OOM
+    가드가 무력화된다. cgroup v2(`memory.max`/`memory.current`) · v1
+    (`memory.limit_in_bytes`/`memory.usage_in_bytes`) 의 **한도 - 현재사용량** 을
+    가용량으로 계산한다 (한도 자체가 아님 — STT 로드 시점에 이미 점유 중인
+    Python/Chromium 메모리를 차감해야 정확).
+    """
+    # cgroup v2
+    limit = _read_int(Path("/sys/fs/cgroup/memory.max"))
+    used = _read_int(Path("/sys/fs/cgroup/memory.current"))
+    if limit is None:
+        # cgroup v1
+        limit = _read_int(Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
+        used = _read_int(Path("/sys/fs/cgroup/memory/memory.usage_in_bytes"))
+    if limit is None or limit >= 2**62:  # 무제한 sentinel
+        return None
+    free = max(0, limit - (used or 0))
+    return free // (1024 * 1024)
+
 
 def _available_memory_mb() -> int | None:
-    """현재 프로세스가 쓸 수 있는 대략적 RAM (MB). 측정 불가 시 None."""
-    # psutil 이 없는 환경(Docker minimal, 외부 Python) 도 대응 — 실패 시 건너뜀.
+    """STT 모델 로드 가능 여부 판정용 가용 RAM (MB). 측정 불가 시 None.
+
+    컨테이너 안에서는 cgroup 한도와 호스트 가용량의 **min** 을 채택해 가장
+    보수적으로 다운그레이드를 판정한다 (cgroup-aware — M3).
+    """
+    cgroup_mb = _cgroup_available_mb()
+
+    host_mb: int | None = None
+    # psutil 이 없는 환경(Docker minimal, 외부 Python) 도 대응.
     try:
         import psutil  # type: ignore[import-not-found]
 
-        return int(psutil.virtual_memory().available / (1024 * 1024))
+        host_mb = int(psutil.virtual_memory().available / (1024 * 1024))
     except ImportError:
-        pass
+        # POSIX fallback — /proc/meminfo 의 MemAvailable 파싱.
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        host_mb = int(line.split()[1]) // 1024
+                        break
+        except (OSError, ValueError):
+            host_mb = None
 
-    # POSIX fallback — /proc/meminfo 의 MemAvailable 파싱.
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    kb = int(line.split()[1])
-                    return kb // 1024
-    except (OSError, ValueError):
-        pass
-    return None
+    candidates = [v for v in (cgroup_mb, host_mb) if v is not None]
+    return min(candidates) if candidates else None
 
 
 def _resolve_model_size(requested: str) -> str:
@@ -137,7 +198,17 @@ def transcribe(audio_path: Path, model_size: str = "base", language: str = "") -
     with _model_lock:
         if effective_size not in _model_cache:
             _release_model()
-            _model_cache[effective_size] = WhisperModel(effective_size, device="cpu", compute_type="int8")
+            # M4: cpu_threads 미지정 시 CTranslate2 가 전 코어를 점유한다. docker-compose 에
+            # CPU 제한이 없어 STT 가 호스트 CPU 를 포화시키므로 WHISPER_CPU_THREADS(기본 2)
+            # 로 상한을 둔다. num_workers=1 — 단일 전사라 병렬 worker 불필요.
+            _cpu_threads = _resolve_cpu_threads()
+            _model_cache[effective_size] = WhisperModel(
+                effective_size,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=_cpu_threads,
+                num_workers=1,
+            )
         model = _model_cache[effective_size]
 
     transcribe_kwargs = {}
