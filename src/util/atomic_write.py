@@ -19,8 +19,9 @@ import contextlib
 import logging
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 _log = logging.getLogger(__name__)
 
@@ -110,3 +111,42 @@ def file_lock(path: Path) -> Iterator[None]:
         finally:
             with contextlib.suppress(OSError):
                 os.close(fd)
+
+
+@contextlib.contextmanager
+def locked_transaction(
+    path: Path,
+    *,
+    load_fn: Callable[[], Any],
+    save_fn: Callable[[Any], None],
+) -> Iterator[Any]:
+    """단일 `file_lock` 안에서 load → yield(mutate) → save 를 원자적으로 수행한다.
+
+    `.env` / `auto_progress.json` / `deadline_notified.json` 처럼 "디스크에서 읽어
+    수정 후 다시 쓰는" 상태 파일의 lost-update (load 는 락 밖, write 만 락 안이라
+    두 프로세스가 서로의 변경을 덮어쓰던 문제) 를 막는다.
+
+    사용:
+        with locked_transaction(path, load_fn=_load, save_fn=_save) as data:
+            data[key] = value          # mutate
+
+    제약 (반드시 준수):
+    - **재진입 금지**: POSIX `flock(LOCK_EX)` 는 동일 프로세스가 같은 path 에 중첩
+      호출하면 self-deadlock 한다. `load_fn` / `save_fn` / with 본문 안에서 같은
+      path 의 `locked_transaction` / `file_lock` 을 다시 호출하지 말 것.
+    - **Windows 한계**: Windows `file_lock` 은 non-blocking advisory(`LK_NBLCK`) 이므로
+      cross-process 직렬화를 보장하지 않는다. 강보장이 필요한 환경은 Docker/Linux
+      (flock) 를 사용한다.
+
+    with 본문에서 예외가 발생하면 `save_fn` 을 호출하지 않는다 (corrupt 데이터
+    저장 방지). 정상 완료 시에만 저장한다.
+    """
+    with file_lock(path):
+        data = load_fn()
+        ok = False
+        try:
+            yield data
+            ok = True
+        finally:
+            if ok:
+                save_fn(data)
