@@ -16,14 +16,19 @@
 from __future__ import annotations
 
 import contextlib
-import logging
 import os
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-_log = logging.getLogger(__name__)
+from src.logger import get_logger
+
+# R2-01 / LOG-SYS-1: logging.getLogger(__name__) 는 root 핸들러 부재로
+# silent log loss + SensitiveFilter 우회. 앱 전역 로거 트리에 귀속한다.
+# 순환 import 검증: src.logger → src.util.log_sanitize(re 만 import) 로
+# atomic_write 로 되돌아오지 않으므로 top-level import 안전.
+_log = get_logger("util.atomic_write")
 
 
 def atomic_write_text(path: Path, text: str, *, mode: int = 0o600, encoding: str = "utf-8") -> None:

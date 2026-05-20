@@ -8,7 +8,7 @@
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from src.config import KST, get_data_path
@@ -43,6 +43,10 @@ class DeadlineItem:
     remaining_hours: float
     threshold: int
     dedup_key: str
+    # R2-09: 한 강의가 여러 threshold 를 동시 통과할 때 가장 임박한 1건만
+    # 발송하고, 함께 통과했으나 발송하지 않은 다른 threshold 의 dedup 키를
+    # 여기 담아 호출자가 notified 에 기록(suppress)하도록 한다.
+    suppress_keys: list[str] = field(default_factory=list)
 
 
 def _parse_lms_date(date_str: str, now: datetime | None = None) -> datetime | None:
@@ -86,8 +90,13 @@ def _parse_lms_date(date_str: str, now: datetime | None = None) -> datetime | No
 
 
 def _make_dedup_key(course: Course, lecture: LectureItem, threshold: int) -> str:
-    """과목 ID + 강의 제목 해시 기반의 안정적인 dedup 키를 생성한다."""
-    stable_id = hashlib.sha256(f"{course.id}:{lecture.title}".encode()).hexdigest()[:16]
+    """과목 ID + 강의 URL 해시 기반의 안정적인 dedup 키를 생성한다.
+
+    COD-N01: 기존에는 `lecture.title` 을 키 재료로 썼으나 LMS 에서 강의
+    제목이 수정되면 동일 강의가 다른 키로 인식돼 마감 알림이 중복 발송됐다.
+    `full_url`(item_url 기반)은 강의 항목 고유 식별자라 제목 변경에 불변이다.
+    """
+    stable_id = hashlib.sha256(f"{course.id}:{lecture.full_url}".encode()).hexdigest()[:16]
     return f"{stable_id}:{threshold}"
 
 
@@ -173,21 +182,35 @@ def find_approaching_deadlines(
 
                 type_label = _TYPE_LABELS.get(lec.lecture_type, lec.lecture_type.value)
 
-                for threshold in _THRESHOLDS:
-                    key = _make_dedup_key(course, lec, threshold)
-                    if key in notified:
-                        continue
-                    if remaining_hours <= threshold:
-                        items.append(
-                            DeadlineItem(
-                                course=course,
-                                lecture=lec,
-                                type_label=type_label,
-                                remaining_hours=remaining_hours,
-                                threshold=threshold,
-                                dedup_key=key,
-                            )
-                        )
+                # R2-09: 한 강의가 24h·12h 양쪽 threshold 를 동시 통과할 때
+                # (예: 마감 12h 이내 구간에서 처음 관측) 가장 임박한(가장 작은)
+                # threshold 1건만 발송하고, 함께 통과한 나머지 threshold 의
+                # dedup 키는 suppress_keys 로 넘겨 호출자가 notified 에 기록한다.
+                # → 같은 강의에 알림 2건 동시 발송 방지.
+                passing = [
+                    threshold
+                    for threshold in _THRESHOLDS
+                    if remaining_hours <= threshold
+                    and _make_dedup_key(course, lec, threshold) not in notified
+                ]
+                if not passing:
+                    continue
+                chosen = min(passing)
+                items.append(
+                    DeadlineItem(
+                        course=course,
+                        lecture=lec,
+                        type_label=type_label,
+                        remaining_hours=remaining_hours,
+                        threshold=chosen,
+                        dedup_key=_make_dedup_key(course, lec, chosen),
+                        suppress_keys=[
+                            _make_dedup_key(course, lec, threshold)
+                            for threshold in passing
+                            if threshold != chosen
+                        ],
+                    )
+                )
 
     return items
 
@@ -238,6 +261,9 @@ def check_and_notify_deadlines(
         )
         if ok:
             sent_keys.add(item.dedup_key)
+            # R2-09: 함께 통과했으나 발송하지 않은 threshold 키도 notified 에
+            # 기록해 다음 체크에서 잔여 알림이 재발송되지 않도록 suppress 한다.
+            sent_keys.update(item.suppress_keys)
 
     # L6: stale 제거 + 발송 성공 키 추가를 단일 file_lock 안에서 수행한다.
     # locked_transaction 이 디스크 최신본을 다시 읽어 merge — 자동 모드와 수동

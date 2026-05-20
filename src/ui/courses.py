@@ -90,6 +90,9 @@ def _redraw_course_list(
         )
 
     console.print(table)
+    if not courses:
+        # CLI-F9: 과목 0개일 때 빈 테이블만 보이지 않도록 안내 추가
+        console.print("  [yellow]수강 중인 과목이 없습니다.[/yellow]")
     console.print()
 
 

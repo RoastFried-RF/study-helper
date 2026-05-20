@@ -93,6 +93,58 @@ def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
     )
 
 
+def _send_message_verify(bot_token: str, chat_id: str, text: str) -> tuple[bool, str]:
+    """verify 전용 sendMessage — 실패 사유를 4xx/5xx/network 로 구분 반환한다.
+
+    API-F4: 일반 `_send_message` 는 모든 실패를 `False` 로 뭉뚱그려
+    `verify_bot` 이 5xx/네트워크 장애까지 `INVALID_CHAT_ID` 로 오분류했다.
+    verify 경로에서는 status code 를 직접 검사해 사유를 분리한다.
+
+    Returns:
+        (성공 여부, 오류 코드) — 오류 코드는 빈 문자열(성공) /
+        INVALID_CHAT_ID / NETWORK_ERROR / TELEGRAM_API_ERROR 중 하나.
+    """
+    if not _validate_token(bot_token):
+        return False, "INVALID_TOKEN_FORMAT"
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    last_status: int | None = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.post(
+                url, json={"chat_id": chat_id, "text": text}, timeout=10
+            )
+            try:
+                if resp.ok:
+                    try:
+                        if resp.json().get("ok", False):
+                            return True, ""
+                    except ValueError:
+                        return False, "TELEGRAM_API_ERROR"
+                    return False, "TELEGRAM_API_ERROR"
+                last_status = resp.status_code
+                if not _is_retriable_status(resp.status_code):
+                    # 4xx — 잘못된 chat_id 등. 재시도 무의미.
+                    _log.warning(
+                        "Telegram sendMessage(verify) %d — 재시도 안 함",
+                        resp.status_code,
+                    )
+                    return False, "INVALID_CHAT_ID"
+            finally:
+                resp.close()
+        except requests.exceptions.RequestException as e:
+            _log.warning(
+                "Telegram sendMessage(verify) 네트워크 오류: %s", type(e).__name__
+            )
+            last_status = None
+        if attempt < _MAX_RETRIES - 1:
+            time.sleep(_RETRY_BASE_DELAY * (2**attempt))
+    # 재시도 소진 — 5xx/429 이면 API 오류, 네트워크 예외면 NETWORK_ERROR.
+    if last_status is not None:
+        _log.warning("Telegram sendMessage(verify) 최종 실패: status=%d", last_status)
+        return False, "TELEGRAM_API_ERROR"
+    return False, "NETWORK_ERROR"
+
+
 def _send_document(bot_token: str, chat_id: str, file_path: Path, caption: str = "") -> bool:
     """텔레그램 파일을 전송한다. 50MB 초과 파일은 전송 시도 없이 False."""
     if not _validate_token(bot_token):
@@ -316,6 +368,10 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
     if not _validate_token(bot_token):
         return False, "INVALID_TOKEN_FORMAT"
 
+    # API-F5: 빈 chat_id 는 텔레그램 API 왕복 없이 즉시 거부한다.
+    if not chat_id:
+        return False, "INVALID_CHAT_ID"
+
     try:
         resp = requests.get(
             f"https://api.telegram.org/bot{bot_token}/getMe",
@@ -343,8 +399,12 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
         _log.warning("Telegram getMe 네트워크 오류: %s: %s", type(e).__name__, e)
         return False, "NETWORK_ERROR"
 
-    ok = _send_message(bot_token, chat_id, f"[알림] study-helper 텔레그램 알림이 연결되었습니다! (봇: @{bot_name})")
+    # API-F4: 실패 사유를 4xx(INVALID_CHAT_ID)/5xx(TELEGRAM_API_ERROR)/network
+    # (NETWORK_ERROR)로 구분 반환 — 무조건 INVALID_CHAT_ID 오분류 방지.
+    ok, err_code = _send_message_verify(
+        bot_token, chat_id, f"[알림] study-helper 텔레그램 알림이 연결되었습니다! (봇: @{bot_name})"
+    )
     if not ok:
-        return False, "INVALID_CHAT_ID"
+        return False, err_code or "INVALID_CHAT_ID"
 
     return True, ""

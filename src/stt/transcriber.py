@@ -18,6 +18,13 @@ _log = get_logger("stt")
 _model_cache: dict = {}
 _model_lock = threading.Lock()
 
+# NEW-08: 전사(model.transcribe + segment 소비) 전용 직렬화 락.
+# `_model_lock`(로드/해제 전용, 짧은 임계영역)과 분리한 별도 락이다.
+# 같은 캐시 WhisperModel 인스턴스를 여러 스레드(/transcribe 동시 요청)가
+# 병렬 호출하면 CTranslate2 내부 상태 race 가 발생할 수 있어 전사 자체를
+# 직렬화한다. 모델 로드와 전사가 서로 다른 락이라 데드락은 없다.
+_transcribe_lock = threading.Lock()
+
 # 각 Whisper 모델 로드 시 필요한 대략적 RAM (MB). int8 quantization 기준.
 # faster-whisper 공식 가이드 수치에 여유(+50%)를 더한 실전 최저선.
 # 현재 가용 메모리가 이 값 미만이면 더 작은 모델로 자동 다운그레이드.
@@ -155,8 +162,14 @@ def _release_model() -> None:
 
 
 def unload_model() -> None:
-    """외부에서 모델을 명시적으로 해제할 때 사용한다."""
-    with _model_lock:
+    """외부에서 모델을 명시적으로 해제할 때 사용한다.
+
+    NEW-08: in-flight 전사가 사용 중인 WhisperModel 을 해제하지 않도록
+    `_transcribe_lock` 을 먼저 잡아 전사 완료를 기다린 뒤 해제한다.
+    락 순서는 항상 `_transcribe_lock` → `_model_lock` 으로 일관 유지해
+    데드락을 방지한다 (transcribe 도 동일 순서로 획득).
+    """
+    with _transcribe_lock, _model_lock:
         _release_model()
 
 
@@ -214,20 +227,42 @@ def transcribe(audio_path: Path, model_size: str = "base", language: str = "") -
     transcribe_kwargs = {}
     if language:
         transcribe_kwargs["language"] = language
-    segments, _ = model.transcribe(str(audio_path), **transcribe_kwargs)
 
-    # 세그먼트를 스트리밍으로 파일에 직접 기록하여 전체 텍스트 메모리 적재 방지.
-    # B4: 세그먼트 개수를 집계해 무음/빈 결과를 가시화하고 후속 파이프라인이
-    # 빈 파일로 요약 시도하지 않도록 판단 근거를 로깅한다.
+    # NEW-08: faster-whisper segment generator 는 lazy — 실제 디코딩은 아래
+    # 루프 소비 시점에 일어난다. 같은 캐시 WhisperModel 의 병렬 전사 race 와
+    # safe_unload() 와의 상호배제를 위해 전사 호출+소비 전체를 전용 락으로
+    # 직렬화한다. `_model_lock`(로드 전용)과 분리한 별도 락이라 모델 로드와
+    # 전사가 서로 막지 않고, 데드락 없이 전사끼리만 직렬화된다.
     txt_path = audio_path.with_suffix(".txt")
+    # NEW-06: 세그먼트 루프 도중 디코드 예외가 나면 부분 txt 가 남아 다음
+    # 실행의 is_transcript_usable 가드를 통과해 불완전 요약이 생긴다.
+    # 임시 경로(.txt.partial)에 기록하고 루프 정상 완료 후에만 최종 경로로
+    # rename 한다. 예외 시 임시 파일을 제거하고 전파한다.
+    tmp_path = txt_path.with_suffix(".txt.partial")
     segment_count = 0
     total_chars = 0
-    with open(txt_path, "w", encoding="utf-8") as f:
-        for segment in segments:
-            text = segment.text
-            f.write(text)
-            segment_count += 1
-            total_chars += len(text)
+    with _transcribe_lock:
+        segments, _ = model.transcribe(str(audio_path), **transcribe_kwargs)
+        try:
+            # 세그먼트를 스트리밍으로 파일에 직접 기록하여 전체 텍스트 메모리 적재 방지.
+            # B4: 세그먼트 개수를 집계해 무음/빈 결과를 가시화하고 후속 파이프라인이
+            # 빈 파일로 요약 시도하지 않도록 판단 근거를 로깅한다.
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                for segment in segments:
+                    text = segment.text
+                    f.write(text)
+                    segment_count += 1
+                    total_chars += len(text)
+        except Exception:
+            # 부분 txt 잔존 방지 — 임시 파일 제거 후 예외 전파.
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+            raise
+    # 루프 정상 완료 — 임시 파일을 최종 경로로 원자적 교체.
+    tmp_path.replace(txt_path)
 
     if segment_count == 0 or total_chars == 0:
         _log.warning(

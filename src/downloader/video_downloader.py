@@ -222,7 +222,7 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
             _content_php_seen = True
 
             async def _parse_content_php():
-                nonlocal _content_php_parse_error
+                nonlocal _content_php_parse_error, _content_parsed
                 try:
                     from defusedxml.ElementTree import fromstring as _safe_fromstring
 
@@ -265,10 +265,17 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
                         _dl_log.info(
                             "content.php 파싱됨 but main_media/media_uri 필드 없음 — url=%s", url,
                         )
+                        # R2-10: 첫 content.php 응답이 placeholder/필드 부재였다면
+                        # 플래그를 풀어 다음 content.php 응답을 재파싱하도록 한다.
+                        # 진짜 미디어 URL을 담은 후속 응답이 영구 누락되지 않게 함.
+                        _content_parsed = False
                 except Exception as e:
                     # DEBUG → INFO 승격: 이 정보가 파일 로그에 남아야 진단 가능
                     _content_php_parse_error = f"{type(e).__name__}: {e}"
                     _dl_log.info("content.php 파싱 오류: %s: %s", type(e).__name__, e)
+                    # R2-10: 파싱 자체가 실패한 경우에도 다음 content.php 응답
+                    # 재파싱을 허용 (일시적 응답 손상 / 부분 응답 대응).
+                    _content_parsed = False
 
             _bg_task = asyncio.create_task(_parse_content_php())
             _bg_task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)

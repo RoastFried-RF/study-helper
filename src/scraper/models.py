@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+from urllib.parse import urlparse
 
 _BASE_URL = "https://canvas.ssu.ac.kr"
 
@@ -84,8 +85,23 @@ class LectureItem:
 
         learningx 플레이어는 mp4/HLS URL 노출이 없어 다운로드 불가.
         이 판정은 URL 패턴만으로 수행되며, 실제 추출 실패는 별도 경로에서 처리.
+
+        NF-06: `"learningx" not in full_url` 의 단순 substring 매칭은 쿼리
+        파라미터 등 URL 의 무관한 위치에 우연히 "learningx" 가 등장해도 과탐했다.
+        hostname 라벨 / 경로 세그먼트 단위로 좁혀 오탐을 줄인다.
         """
-        return self.is_video and "learningx" not in self.full_url
+        if not self.is_video:
+            return False
+        parsed = urlparse(self.full_url)
+        hostname = (parsed.hostname or "").lower()
+        # hostname 라벨 단위 매칭 (예: learningx.example.com)
+        if "learningx" in hostname.split("."):
+            return False
+        # 경로 세그먼트 단위 매칭 (예: /learningx/lti/...)
+        path_segments = [seg.lower() for seg in parsed.path.split("/") if seg]
+        if "learningx" in path_segments:
+            return False
+        return True
 
     # 경로 계산(expected_paths/file_present)은 scraper → downloader 역방향 의존을 피하기
     # 위해 src/downloader/paths.py의 순수 함수로 이동했다. 호출부는 `from

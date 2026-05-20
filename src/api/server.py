@@ -78,6 +78,11 @@ app.include_router(
     prefix="/download", tags=["download"],
     dependencies=[Depends(_verify_token)],
 )
+# WS /pipeline 은 핸들러 내부 메시지 기반 토큰 인증을 사용하므로 헤더 dependency 제외.
+app.include_router(
+    download_routes.ws_router,
+    prefix="/download", tags=["download"],
+)
 app.include_router(
     notify_routes.router,
     prefix="/notify", tags=["notify"],

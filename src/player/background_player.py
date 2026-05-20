@@ -227,7 +227,12 @@ def _parse_player_url(player_url: str) -> dict:
     parsed = urlparse(player_url)
     qs = parse_qs(parsed.query)
 
-    duration = float(qs.get("endat", ["0"])[0])
+    # R2-05: endat 이 비숫자(예: endat=abc)면 float() 가 ValueError 를 던져
+    # 재생 완료 보고 경로 전체가 중단된다. 방어적으로 0.0 으로 폴백한다.
+    try:
+        duration = float(qs.get("endat", ["0"])[0])
+    except (ValueError, TypeError):
+        duration = 0.0
     target_url = unquote(qs.get("TargetUrl", [""])[0])
 
     # progress_url 호스트 검증 — LMS 서버 외 URL 차단 (SSRF 방지)
@@ -333,12 +338,16 @@ async def _report_completion(
             callback_prefix="jQuery111_",
         )
 
+    # R2-08: 4xx 는 결정적(deterministic) 에러 — 재시도해도 같은 응답이라
+    # 6초+ 왕복만 낭비한다. 4xx 관측 시 즉시 중단하고, 5xx/네트워크/타임아웃
+    # (일시적 장애) 만 재시도 루프를 계속한다.
     for attempt in range(3):
         if attempt > 0:
             log(f"  [완료 보고] 재시도 {attempt + 1}/3 (2초 대기 후)")
             await asyncio.sleep(2)
 
         log(f"  [완료 보고] 100% 진도 직접 전송 (duration={duration:.1f}s)")
+        deterministic_fail = False
 
         # Plan A: page.evaluate fetch (canvas.ssu.ac.kr 동일 오리진 — sl=1 세션 중에도 동작)
         if use_page_eval:
@@ -359,6 +368,8 @@ async def _report_completion(
                 log(f"  [완료 보고] page ctx fetch: {status}  body={_mask_sensitive(body)!r}")
                 if status == 200 and '"result":true' in body:
                     return
+                if isinstance(status, int) and 400 <= status < 500:
+                    deterministic_fail = True
                 log(f"  [완료 보고] page ctx fetch 실패 ({status}) — page.request.get으로 폴백")
             except Exception as e:
                 log(f"  [완료 보고] page ctx fetch 오류: {e}")
@@ -387,12 +398,18 @@ async def _report_completion(
                 log(f"  [완료 보고] request.get 응답: {response.status}  body={body[:200]!r}")
                 if '"result":true' in body:
                     return
+                if 400 <= response.status < 500:
+                    deterministic_fail = True
             finally:
                 await response.dispose()
         except Exception as e:
             log(f"  [완료 보고] request.get 실패: {e}")
 
-    log("  [완료 보고] 3회 시도 모두 실패 — 출석이 인정되지 않았을 수 있습니다")
+        if deterministic_fail:
+            log("  [완료 보고] 4xx 결정적 에러 — 재시도 중단")
+            break
+
+    log("  [완료 보고] 시도 종료 — 출석이 인정되지 않았을 수 있습니다")
 
 
 async def _play_via_learningx_api(
@@ -403,6 +420,7 @@ async def _play_via_learningx_api(
     fallback_duration: float = 0.0,
     *,
     learningx_frame: Frame | None = None,
+    stop_event: "asyncio.Event | None" = None,
 ) -> PlaybackState:
     """
     learningx 플레이어 전용 Plan B.
@@ -531,6 +549,7 @@ async def _play_via_learningx_api(
         on_progress,
         log,
         fallback_duration=duration if duration > 0 else fallback_duration,
+        stop_event=stop_event,
     )
 
 
@@ -540,6 +559,7 @@ async def _play_via_progress_api(
     on_progress: Callable[[PlaybackState], None] | None,
     log: Callable[[str], None],
     fallback_duration: float = 0.0,
+    stop_event: "asyncio.Event | None" = None,
 ) -> PlaybackState:
     """
     headless에서 플레이어 로드에 실패할 때 사용하는 Plan B.
@@ -618,6 +638,13 @@ async def _play_via_progress_api(
     total_page = 15
 
     while current < duration:
+        # R2-03: 긴 강의 재생 중 사용자가 종료('0' 입력)를 요청하면 영상 길이만큼
+        # 기다리지 않고 즉시 루프를 탈출한다. stop_event 미전달 시 None 으로
+        # 하위호환(검사 스킵).
+        if stop_event is not None and stop_event.is_set():
+            log("  [API] 종료 요청 감지 — 재생 루프 중단")
+            state.error = "재생이 사용자 요청으로 중단되었습니다."
+            return state
         await asyncio.sleep(_POLL_INTERVAL)
         current = min(current + _POLL_INTERVAL, duration)
         state.current = current
@@ -757,6 +784,7 @@ async def play_lecture(
     debug: bool = False,
     fallback_duration: float = 0.0,
     log_fn: Callable | None = None,
+    stop_event: "asyncio.Event | None" = None,
 ) -> PlaybackState:
     """
     강의 URL을 headless 브라우저로 재생한다.
@@ -767,6 +795,9 @@ async def play_lecture(
         on_progress:  재생 진행 시 주기적으로 호출되는 콜백. PlaybackState 전달.
         debug:        True이면 단계별 진단 로그를 출력한다.
         log_fn:       debug 출력에 사용할 로그 함수. 미지정 시 print 사용.
+        stop_event:   재생 루프 중단 신호 (R2-03). 설정되면 Plan A/B 폴링
+                      루프 상단에서 검사해 즉시 탈출한다. None 이면 검사 스킵
+                      (하위호환).
 
     Returns:
         최종 PlaybackState.
@@ -938,6 +969,7 @@ async def play_lecture(
             log,
             state,
             _using_fake_video,
+            stop_event,
         )
     finally:
         await _cleanup()
@@ -952,6 +984,7 @@ async def _play_lecture_inner(
     log: Callable[[str], None],
     state: PlaybackState,
     _using_fake_video: bool,
+    stop_event: "asyncio.Event | None" = None,
 ) -> PlaybackState:
     """play_lecture()의 실제 재생 로직. try-finally로 _cleanup() 보장을 위해 분리."""
     # 0.5. 세션 유효성 체크 — 만료 시 대시보드 접근으로 리다이렉트 감지
@@ -1000,6 +1033,7 @@ async def _play_lecture_inner(
             lx_state = await _play_via_learningx_api(
                 page, tool_frame.url, on_progress, log, fallback_duration,
                 learningx_frame=tool_frame,
+                stop_event=stop_event,
             )
             # learningx API 실패 시 (401 등) 페이지 재로드 후 commons frame 재탐색
             if lx_state.error and not lx_state.ended:
@@ -1010,7 +1044,10 @@ async def _play_lecture_inner(
                     retry_frame = await find_player_frame(page)
                     if retry_frame:
                         log(f"    → commons frame 발견: {retry_frame.url}")
-                        return await _play_via_progress_api(page, retry_frame.url, on_progress, log, fallback_duration)
+                        return await _play_via_progress_api(
+                            page, retry_frame.url, on_progress, log, fallback_duration,
+                            stop_event=stop_event,
+                        )
                 except Exception as retry_e:
                     log(f"    → 재로드 후 재탐색 실패: {retry_e}")
             return lx_state
@@ -1062,7 +1099,10 @@ async def _play_lecture_inner(
     if not frame:
         log("    → video frame 없음. 진도 API 직접 호출 방식으로 전환...")
         log(f"    → player URL: {player_url_snapshot}")
-        return await _play_via_progress_api(page, player_url_snapshot, on_progress, log, fallback_duration)
+        return await _play_via_progress_api(
+            page, player_url_snapshot, on_progress, log, fallback_duration,
+            stop_event=stop_event,
+        )
     log(f"    → video frame 발견: {frame.url}")
 
     # 6. video 요소 duration 대기
@@ -1084,7 +1124,10 @@ async def _play_lecture_inner(
         plan_b_url = frame.url if frame and "commons.ssu.ac.kr" in frame.url else player_url_snapshot
         log(f"[6] 영상 로드 실패 → Plan B(진도 API) 전환 시도 (url={plan_b_url[:80]}...)")
         try:
-            return await _play_via_progress_api(page, plan_b_url, on_progress, log, fallback_duration)
+            return await _play_via_progress_api(
+                page, plan_b_url, on_progress, log, fallback_duration,
+                stop_event=stop_event,
+            )
         except Exception as plan_b_e:
             log(f"[6] Plan B 전환 실패: {plan_b_e}")
             state.error = "영상이 시작되지 않았습니다."
@@ -1221,6 +1264,11 @@ async def _play_lecture_inner(
     _AFTER_UPDATE_INTERVAL = 30.0  # afterTimeUpdate 수동 호출 주기 (초)
     _last_after_update = asyncio.get_running_loop().time() - _AFTER_UPDATE_INTERVAL  # 즉시 첫 호출
     while True:
+        # R2-03: 사용자 종료 요청 시 영상 종료를 기다리지 않고 즉시 탈출.
+        if stop_event is not None and stop_event.is_set():
+            log("[7] 종료 요청 감지 — 재생 루프 중단")
+            state.error = "재생이 사용자 요청으로 중단되었습니다."
+            return state
         info = await _get_video_state(frame)
         if info is None:
             # frame이 언로드된 경우
@@ -1320,7 +1368,10 @@ async def _play_lecture_inner(
     # duration의 50% 미만에서 ended되면 Plan B로 전환해 progress API를 직접 호출한다.
     if state.ended and state.duration > 0 and state.current < state.duration * 0.5:
         log(f"[7] 영상이 예상보다 일찍 종료 ({state.current:.1f}s / {state.duration:.1f}s) — Plan B로 전환")
-        return await _play_via_progress_api(page, player_url_snapshot, on_progress, log, fallback_duration)
+        return await _play_via_progress_api(
+            page, player_url_snapshot, on_progress, log, fallback_duration,
+            stop_event=stop_event,
+        )
 
     # Plan A 완료 후 progress API에 100% 직접 보고
     # 플레이어 JS가 가짜 WebM 재생 중 progress API를 호출하지 않는 경우 대비

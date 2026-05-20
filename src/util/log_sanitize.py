@@ -20,6 +20,12 @@ MASK = "***REDACTED***"
 
 # 민감 키 이름 — 정규식 alternation 으로 한 번에 처리.
 # 새 키 추가 시 여기에만 넣으면 plain + url-encoded 양쪽 자동 커버.
+# NF-03: LMS 로그인 폼은 실제 필드명이 `userid`(언더스코어 없음)·`pwd` 다
+# (src/auth/login.py 의 `input#userid` / `input#pwd` 참조). `user_id`/`password`
+# 만으로는 폼 body/URL 이 로그에 남을 때 학번·비밀번호가 평문 노출된다.
+# 단어 경계: `userid` 가 `custom_user_id` 등의 부분으로 잘못 매칭되지 않도록
+# alternation 순서상 더 긴 `custom_*` 패턴이 앞서고, KV 정규식이 `key=` 형태로
+# 키 직후 `=` 를 요구하므로 substring 과탐 위험은 제한적이다.
 _SENSITIVE_KEYS = (
     r"oauth_(?:signature|nonce|timestamp|consumer_key|token)"
     r"|csrf[-_]?token"
@@ -27,8 +33,8 @@ _SENSITIVE_KEYS = (
     r"|custom_canvas_user_(?:id|login_id)"
     r"|lis_person_(?:contact_email_primary|name_full|name_given|name_family|sourcedid)"
     r"|tool_consumer_instance_guid"
-    r"|user_image|user_id|user_login|user_email"
-    r"|password|passwd|secret|api[_-]?key|authorization|access_token|refresh_token|token"
+    r"|user_image|user_id|user_login|user_email|userid"
+    r"|password|passwd|pwd|secret|api[_-]?key|authorization|access_token|refresh_token|token"
 )
 
 # Plain `key=value` (form body, 쿼리스트링 중 URL-decoded 섹션)
@@ -38,8 +44,11 @@ _SENSITIVE_KV_RE = re.compile(
 
 # URL-encoded `key%3Dvalue` — `%3D` 는 `=` 의 URL-인코딩. LTI URL 이
 # body 안에 삽입되면 이중 인코딩되어 plain `=` 이 없기 때문에 별도 규칙 필요.
+# NF-04: 값 클래스가 `%` 를 통째로 제외하면 `%XX` 인코딩 시퀀스(예: `%40`=`@`)
+# 에서 매칭이 끊겨 그 이후 평문(이메일/토큰 잔여 부분)이 마스킹되지 않는다.
+# `(?:[^%&\s"'<>]|%[0-9A-Fa-f]{2})+` 로 정상 `%XX` 시퀀스는 값에 포함한다.
 _SENSITIVE_KV_URLENC_RE = re.compile(
-    rf"(?i)({_SENSITIVE_KEYS})%3D([^%&\s\"'<>]+)"
+    rf"(?i)({_SENSITIVE_KEYS})%3D((?:[^%&\s\"'<>]|%[0-9A-Fa-f]{{2}})+)"
 )
 
 # HTML meta / data-* attribute 계열

@@ -179,5 +179,7 @@ def file_present(
         return mp3.exists()
     if rule == "both":
         return mp4.exists() and mp3.exists()
-    # 규칙 미설정 — 둘 중 하나만 있어도 present 간주
-    return mp4.exists() or mp3.exists()
+    # NF-07: 규칙 미설정(빈 DOWNLOAD_RULE) — `both` 와 동일하게 보수적으로
+    # 판정한다. OR 로 두면 mp3 누락을 "완료"로 오판정해 변환/STT 단계를
+    # 건너뛰는 위험이 있어, 둘 다 존재할 때만 present 로 본다.
+    return mp4.exists() and mp3.exists()

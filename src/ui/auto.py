@@ -666,7 +666,7 @@ async def _process_lecture(
             console.print("  [dim]  → 재생 중...[/dim]")
 
         try:
-            success, has_error = await run_player(scraper.page, lec)
+            success, has_error = await run_player(scraper.page, lec, stop_event=stop_event)
             if success:
                 play_success = True
                 break
@@ -755,8 +755,12 @@ async def _run_download_step(
 
     B7: 브라우저 죽음/일시적 네트워크 오류로 한 번 실패해도 같은 강의를 즉시
     포기하지 않도록 3회 지수 백오프 재시도. 재시도 전에 브라우저 death 감지 시
-    자동 재시작을 수행한다. UNSUPPORTED/SUSPICIOUS_STUB 등 구조적 실패는
-    재시도해도 무의미하므로 즉시 반환한다.
+    자동 재시작을 수행한다.
+
+    재시도 불가 판정은 `result.is_no_retry_reason()` (= `result.py` 의
+    `_NO_RETRY_REASONS`) 에 중앙집중된다. `REASON_UNSUPPORTED` 같은 구조적
+    실패만 즉시 반환하며, `SUSPICIOUS_STUB` 은 `_NO_RETRY_REASONS` 에서 의도적
+    으로 제외돼 있어 재추출/재다운로드 재시도 대상이다.
     """
     from src.ui.download import run_download
 
@@ -826,7 +830,13 @@ async def _run_download_step(
 
 
 def _apply_play_result(store: ProgressStore, url: str, result: PlayResult) -> None:
-    """_process_lecture 결과를 ProgressStore에 반영한다."""
+    """_process_lecture 결과를 ProgressStore에 반영한다.
+
+    SVC-F1: `REASON_BROWSER_RESTARTED` 는 강의 자체의 결함이 아니라 driver
+    crash 로 인한 abort 다. 이를 `mark_download_failed` 의 reason 으로 기록하면
+    store 의 실패 사유가 오염되므로, 이 경우 store 갱신을 건너뛰고 다음
+    사이클의 정상 재시도에 위임한다.
+    """
     if result.played:
         store.mark_played(url)
     if not result.downloadable:
@@ -835,7 +845,13 @@ def _apply_play_result(store: ProgressStore, url: str, result: PlayResult) -> No
     if result.downloaded:
         store.mark_download_success(url)
     elif result.played:
-        store.mark_download_failed(url, reason=result.reason or "unknown")
+        # SVC-F1: 브라우저 재시작 abort 는 다운로드 "실패" 가 아님 — store 의
+        # download_failed reason 을 오염시키지 않도록 기록을 생략한다.
+        # 파일이 없으면 다음 사이클에 needs_download_retry 로 자연히 재시도된다.
+        if result.reason == REASON_BROWSER_RESTARTED:
+            _log.info("브라우저 재시작 abort — mark_download_failed 생략 (다음 사이클 재시도 위임): %s", url)
+        else:
+            store.mark_download_failed(url, reason=result.reason or "unknown")
 
 
 # ── 다운로드 누락 점검 — Command/Query/Side-effect 분리 (ARCH-011) ──

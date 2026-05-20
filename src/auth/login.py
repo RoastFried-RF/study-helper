@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import logging
-
 from playwright.async_api import Page
 
-_log = logging.getLogger(__name__)
+from src.logger import get_logger
+
+# R2-01 / LOG-SYS-1: logging.getLogger(__name__) 는 root 핸들러 부재로
+# silent log loss + SensitiveFilter 우회. 앱 전역 로거 트리에 귀속한다.
+_log = get_logger("auth.login")
 
 
 async def perform_login(page: Page, username: str, password: str) -> bool:
