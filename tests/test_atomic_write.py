@@ -6,6 +6,7 @@ POSIX 에서만 직렬화를 강제 검증한다.
 
 from __future__ import annotations
 
+import json
 import multiprocessing as mp
 import sys
 import threading
@@ -13,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from src.util.atomic_write import atomic_write_text, file_lock
+from src.util.atomic_write import atomic_write_text, file_lock, locked_transaction
 
 
 def test_atomic_write_creates_file(tmp_path: Path) -> None:
@@ -132,3 +133,49 @@ def test_lock_file_created_in_parent_dir(tmp_path: Path) -> None:
     target = tmp_path / "deep" / "nested" / "path.json"
     with file_lock(target):
         assert target.parent.exists()
+
+
+# ── WS-0: locked_transaction ──────────────────────────────────
+
+
+def test_locked_transaction_load_mutate_save(tmp_path: Path) -> None:
+    """load → mutate(yield) → save 가 단일 lock 안에서 원자적으로 수행된다."""
+    path = tmp_path / "data.json"
+    path.write_text(json.dumps({"x": 1}), encoding="utf-8")
+
+    with locked_transaction(
+        path,
+        load_fn=lambda: json.loads(path.read_text(encoding="utf-8")),
+        save_fn=lambda d: path.write_text(json.dumps(d), encoding="utf-8"),
+    ) as data:
+        data["y"] = 2
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"x": 1, "y": 2}
+
+
+def test_locked_transaction_skips_save_on_exception(tmp_path: Path) -> None:
+    """with 본문에서 예외 발생 시 save_fn 을 호출하지 않는다 (corrupt 방지)."""
+    path = tmp_path / "data.json"
+    path.write_text(json.dumps({"x": 1}), encoding="utf-8")
+
+    with pytest.raises(RuntimeError):
+        with locked_transaction(
+            path,
+            load_fn=lambda: json.loads(path.read_text(encoding="utf-8")),
+            save_fn=lambda d: path.write_text(json.dumps(d), encoding="utf-8"),
+        ) as data:
+            data["y"] = 2
+            raise RuntimeError("boom")
+
+    # 예외 → save 건너뜀 → 원본 보존
+    assert json.loads(path.read_text(encoding="utf-8")) == {"x": 1}
+
+
+def test_locked_transaction_releases_lock_after_use(tmp_path: Path) -> None:
+    """locked_transaction 종료 후 file_lock 이 해제되어 재획득 가능해야 한다."""
+    path = tmp_path / "data.json"
+    with locked_transaction(path, load_fn=lambda: {}, save_fn=lambda d: None):
+        pass
+    # 재획득 가능
+    with file_lock(path):
+        pass

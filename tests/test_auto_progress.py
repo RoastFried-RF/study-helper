@@ -281,3 +281,113 @@ def test_load_v2_handles_corrupted_play_fail_count(tmp_path: Path):
     e2 = store.get("u2")
     assert e1 is not None and e1.play_fail_count == 0
     assert e2 is not None and e2.play_fail_count == 0
+
+
+# ── M2/M6: flush() delta-merge + maybe_flush 배치 ──────────────
+
+
+def test_flush_merges_concurrent_disk_changes(tmp_path: Path):
+    """M2: flush 가 디스크 최신본을 re-load + merge 한다.
+
+    프로세스 A 가 store 를 로드해 보유하는 동안 프로세스 B 가 다른 URL 을
+    디스크에 기록해도, A 의 flush 가 B 의 변경을 덮어쓰지 않아야 한다.
+    """
+    path = tmp_path / "auto_progress.json"
+
+    # 프로세스 A — 로드 후 url-a 변경 (아직 flush 안 함)
+    a = ProgressStore(path=path)
+    a.load()
+    a.mark_played("url-a")
+
+    # 그 사이 프로세스 B — url-b 를 디스크에 기록
+    b = ProgressStore(path=path)
+    b.load()
+    b.mark_played("url-b")
+    b.flush()
+
+    # A flush — A 의 url-a + B 의 url-b 둘 다 보존돼야 함 (lost update 없음)
+    a.flush()
+
+    reloaded = ProgressStore(path=path)
+    reloaded.load()
+    assert reloaded.get("url-a") is not None
+    assert reloaded.get("url-b") is not None
+
+
+def test_flush_propagates_retain_only_deletion(tmp_path: Path):
+    """M2: retain_only 로 삭제한 entry 가 flush 후 디스크에서도 사라진다."""
+    path = tmp_path / "auto_progress.json"
+    store = ProgressStore(path=path)
+    for url in ("keep1", "keep2", "orphan"):
+        store.mark_played(url)
+    store.flush()
+
+    store.retain_only({"keep1", "keep2"})
+    store.flush()
+
+    reloaded = ProgressStore(path=path)
+    reloaded.load()
+    assert reloaded.get("orphan") is None
+    assert reloaded.get("keep1") is not None
+    assert reloaded.get("keep2") is not None
+
+
+def test_flush_noop_when_no_changes(tmp_path: Path):
+    """변경(_dirty)이 없으면 flush 는 파일을 만들지 않는다."""
+    store = ProgressStore(path=tmp_path / "auto_progress.json")
+    store.load()
+    store.flush()
+    assert not store.path.exists()
+
+
+def test_maybe_flush_batches_writes(tmp_path: Path, monkeypatch):
+    """M6: maybe_flush 는 _dirty 누적이 임계 이상일 때만 flush 한다."""
+    import src.service.progress_store as ps
+
+    monkeypatch.setattr(ps, "_SAVE_INTERVAL", 3)
+    store = ps.ProgressStore(path=tmp_path / "auto_progress.json")
+
+    store.mark_played("a")          # _dirty=1
+    store.maybe_flush()             # 1 < 3 → 미기록
+    assert not store.path.exists()
+
+    store.mark_played("b")          # _dirty=2
+    store.mark_played("c")          # _dirty=3
+    store.maybe_flush()             # 3 >= 3 → 기록
+    assert store.path.exists()
+
+    reloaded = ps.ProgressStore(path=store.path)
+    reloaded.load()
+    assert {"a", "b", "c"} <= set(reloaded.entries.keys())
+
+
+def test_remove_then_mark_reactivates_entry(tmp_path: Path):
+    """remove 후 같은 URL 재마킹 시 flush 가 재삽입한다 (_touch 가 _removed 무효화)."""
+    path = tmp_path / "auto_progress.json"
+    store = ProgressStore(path=path)
+    store.mark_played("u")
+    store.flush()
+
+    store.remove("u")          # _removed = {u}
+    store.mark_played("u")     # _touch → _removed.discard(u), _touched = {u}
+    store.flush()
+
+    reloaded = ProgressStore(path=path)
+    reloaded.load()
+    assert reloaded.get("u") is not None
+
+
+def test_mark_then_remove_deletes_entry(tmp_path: Path):
+    """mark 후 remove 시 flush 가 디스크에서 삭제한다 (_mark_removed 가 _touched 무효화)."""
+    path = tmp_path / "auto_progress.json"
+    store = ProgressStore(path=path)
+    store.mark_played("u")
+    store.flush()
+
+    store.mark_download_success("u")  # _touched = {u}
+    store.remove("u")                 # _mark_removed → _touched.discard(u), _removed = {u}
+    store.flush()
+
+    reloaded = ProgressStore(path=path)
+    reloaded.load()
+    assert reloaded.get("u") is None

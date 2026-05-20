@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -91,11 +93,15 @@ def update_telegram(body: TelegramUpdate) -> dict[str, str]:
 
 
 @router.post("/telegram/verify")
-def verify_telegram(body: TelegramUpdate) -> dict[str, object]:
-    """텔레그램 봇 연결을 테스트한다."""
+async def verify_telegram(body: TelegramUpdate) -> dict[str, object]:
+    """텔레그램 봇 연결을 테스트한다.
+
+    L8: verify_bot 는 blocking telegram HTTP(getMe + sendMessage) — to_thread 로
+    위임해 FastAPI threadpool 슬롯 장기 점유를 줄인다.
+    """
     from src.notifier.telegram_notifier import verify_bot
 
-    ok, error = verify_bot(body.bot_token, body.chat_id)
+    ok, error = await asyncio.to_thread(verify_bot, body.bot_token, body.chat_id)
     return {"ok": ok, "error": error}
 
 

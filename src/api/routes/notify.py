@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -40,8 +42,11 @@ class NotifyRequest(BaseModel):
 
 
 @router.post("/telegram")
-def send_notification(body: NotifyRequest) -> dict[str, object]:
-    """텔레그램 알림을 전송한다."""
+async def send_notification(body: NotifyRequest) -> dict[str, object]:
+    """텔레그램 알림을 전송한다.
+
+    L8: notify_* 는 blocking telegram HTTP — to_thread 로 위임.
+    """
     tg = Config.get_telegram_credentials()
     if not tg:
         return {"ok": False, "error": "텔레그램 미설정"}
@@ -51,15 +56,22 @@ def send_notification(body: NotifyRequest) -> dict[str, object]:
     if body.message_type == "playback_complete":
         from src.notifier.telegram_notifier import notify_playback_complete
 
-        ok = notify_playback_complete(token, chat_id, body.course_name, body.week_label, body.lecture_title)
+        ok = await asyncio.to_thread(
+            notify_playback_complete, token, chat_id, body.course_name, body.week_label, body.lecture_title
+        )
     elif body.message_type == "playback_error":
         from src.notifier.telegram_notifier import notify_playback_error
 
-        ok = notify_playback_error(token, chat_id, body.course_name, body.week_label, body.lecture_title, body.failed)
+        ok = await asyncio.to_thread(
+            notify_playback_error, token, chat_id, body.course_name, body.week_label,
+            body.lecture_title, body.failed,
+        )
     elif body.message_type == "download_error":
         from src.notifier.telegram_notifier import notify_download_error
 
-        ok = notify_download_error(token, chat_id, body.course_name, body.week_label, body.lecture_title)
+        ok = await asyncio.to_thread(
+            notify_download_error, token, chat_id, body.course_name, body.week_label, body.lecture_title
+        )
     else:
         return {"ok": False, "error": f"알 수 없는 메시지 타입: {body.message_type}"}
 

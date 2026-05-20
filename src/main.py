@@ -94,7 +94,10 @@ async def run():
     if tg:
         from src.notifier.deadline_checker import check_and_notify_deadlines
 
-        deadline_count = check_and_notify_deadlines(courses, details, token=tg[0], chat_id=tg[1])
+        # M5: deadline 체크는 다건 telegram sendMessage(blocking) — executor 위임
+        deadline_count = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: check_and_notify_deadlines(courses, details, token=tg[0], chat_id=tg[1])
+        )
         if deadline_count > 0:
             console.print(f"  [yellow]마감 임박 항목 {deadline_count}건 — 텔레그램 알림 전송 완료[/yellow]")
 
@@ -133,9 +136,9 @@ async def run():
                 success, has_error = await run_player(scraper.page, lec, debug=False)
                 if success:
                     lec.completion = "completed"
-                    _tg_notify_playback_complete(selected.long_name, lec)
+                    await _tg_notify_playback_complete(selected.long_name, lec)
                 else:
-                    _tg_notify_playback_error(selected.long_name, lec, failed=has_error)
+                    await _tg_notify_playback_error(selected.long_name, lec, failed=has_error)
                 await asyncio.get_running_loop().run_in_executor(None, lambda: input("\n  Enter를 눌러 계속..."))
             elif action == LectureAction.DOWNLOAD:
                 rule = Config.DOWNLOAD_RULE or "both"
@@ -209,12 +212,16 @@ async def _load_courses(scraper: CourseScraper):
     return courses, details
 
 
-def _tg_notify_playback_complete(course_name: str, lec) -> None:
-    """재생 완료 텔레그램 알림 전송."""
+async def _tg_notify_playback_complete(course_name: str, lec) -> None:
+    """재생 완료 텔레그램 알림 전송.
+
+    M5: telegram HTTP 는 blocking — to_thread 로 위임해 이벤트 루프 freeze 방지.
+    """
     from src.notifier.telegram_dispatch import dispatch_if_configured
     from src.notifier.telegram_notifier import notify_playback_complete
 
-    dispatch_if_configured(
+    await asyncio.to_thread(
+        dispatch_if_configured,
         notify_playback_complete,
         course_name=course_name,
         week_label=lec.week_label,
@@ -222,16 +229,19 @@ def _tg_notify_playback_complete(course_name: str, lec) -> None:
     )
 
 
-def _tg_notify_playback_error(course_name: str, lec, failed: bool = True) -> None:
+async def _tg_notify_playback_error(course_name: str, lec, failed: bool = True) -> None:
     """재생 실패/미완료 텔레그램 알림 전송.
 
     Args:
         failed: True면 재생 오류, False면 재생 미완료(중단)
+
+    M5: telegram HTTP 는 blocking — to_thread 로 위임.
     """
     from src.notifier.telegram_dispatch import dispatch_if_configured
     from src.notifier.telegram_notifier import notify_playback_error
 
-    dispatch_if_configured(
+    await asyncio.to_thread(
+        dispatch_if_configured,
         notify_playback_error,
         course_name=course_name,
         week_label=lec.week_label,

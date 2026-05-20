@@ -17,6 +17,7 @@ opportunistic 으로 추가되어 다음 cycle 부터 fallback 가능.
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,23 @@ if TYPE_CHECKING:
 
 
 _COURSE_ID_MARKER = ".course_id"
+
+# M9: course_dir 해결 결과 메모이즈. expected_paths/file_present 가 강의별로
+# _find_course_dir 를 호출해 같은 과목을 반복 재해결(최악: download root 전체
+# iterdir + 마커 read)하던 비용을 1회로 줄인다.
+_course_dir_cache: dict[tuple[str, str, str], Path] = {}
+_course_dir_lock = threading.Lock()
+
+
+def clear_course_dir_cache() -> None:
+    """course_dir 해결 캐시를 비운다.
+
+    자동 모드는 **매 사이클 시작 시** 호출해, 학기 중 디렉토리가 새로 생성/변경
+    되어도 다음 사이클에 반영되게 한다. 단발성 스크립트(recover/reconcile)는
+    프로세스 수명이 1 pass 라 호출 불필요.
+    """
+    with _course_dir_lock:
+        _course_dir_cache.clear()
 
 
 def _sanitize_segment(name: str) -> str:
@@ -62,19 +80,44 @@ def _find_course_dir(
     course_long_name: str,
     course_id: str,
 ) -> Path:
-    """course 의 디렉토리 경로 결정.
+    """course 의 디렉토리 경로 결정 (M9: 해결 결과 캐시).
 
-    1차: `_sanitize_segment(course_long_name)` 기반. 존재하면 마커 stamp + 반환.
+    같은 `(download_dir, long_name, course_id)` 조합은 사이클 내에서 결과가
+    안정적이므로 메모이즈한다. 캐시는 `clear_course_dir_cache()` (자동 모드 매
+    사이클) 로 무효화한다.
+
+    **마커 stamp 부수효과는 캐시 적중과 무관하게 매 호출 수행한다** — BUG-7 의
+    `.course_id` 마커 stamping 이 캐시로 인해 누락되면 longName 변경 fallback 이
+    깨지기 때문 (idempotent 라 재호출 비용 없음).
+    """
+    key = (str(download_dir), course_long_name, str(course_id))
+    with _course_dir_lock:
+        result = _course_dir_cache.get(key)
+    if result is None:
+        result = _find_course_dir_uncached(download_dir, course_long_name, course_id)
+        with _course_dir_lock:
+            _course_dir_cache[key] = result
+    # BUG-7: 디렉토리가 실재하면 마커를 stamp (캐시 적중 시에도 — idempotent).
+    if result.exists() and result.is_dir():
+        _stamp_course_id_marker(result, str(course_id))
+    return result
+
+
+def _find_course_dir_uncached(
+    download_dir: Path,
+    course_long_name: str,
+    course_id: str,
+) -> Path:
+    """course 의 디렉토리 경로 결정 (실제 FS 탐색 — 마커 stamp 는 호출자가 수행).
+
+    1차: `_sanitize_segment(course_long_name)` 기반. 존재하면 반환.
     2차: `.course_id` 마커가 동일 course_id 인 디렉토리 검색 (longName 변경 fallback).
     3차: 1차 경로 반환 (호출자가 다운로드 시점에 mkdir).
-
-    부수효과: 1차 매치 시 마커가 자동으로 추가됨 (idempotent).
     """
     primary_name = _sanitize_segment(course_long_name)
     primary = download_dir / primary_name
 
     if primary.exists() and primary.is_dir():
-        _stamp_course_id_marker(primary, course_id)
         return primary
 
     # 2차: 마커 기반 fallback (longName 변경 후 디렉토리 매칭)
