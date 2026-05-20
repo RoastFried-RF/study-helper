@@ -82,3 +82,74 @@ def test_all_video_lecture_types():
     for lt in (LectureType.ASSIGNMENT, LectureType.QUIZ, LectureType.DISCUSSION, LectureType.FILE, LectureType.OTHER):
         lec = LectureItem(title="t", item_url="/a", lecture_type=lt)
         assert lec.is_video is False, f"{lt} should not be video"
+
+
+# ── NF-06: is_downloadable 의 learningx 판정 정확도 ──────────────────
+#
+# 버그 시나리오: `"learningx" not in full_url` 의 단순 substring 매칭은
+# query 등 URL 의 무관한 위치에 우연히 "learningx" 가 등장해도 다운로드
+# 불가로 과탐했다. 수정 후에는 hostname 라벨 / 경로 세그먼트 단위로 좁혀
+# 정상 mp4 URL 의 과탐을 막는다.
+
+
+def test_is_downloadable_plain_mp4_url() -> None:
+    """정상 mp4 호스트/경로는 다운로드 가능(True)."""
+    lec = LectureItem(
+        title="t",
+        item_url="https://cdn.example.com/videos/lecture1.mp4",
+        lecture_type=LectureType.MP4,
+    )
+    assert lec.is_downloadable is True
+
+
+def test_is_downloadable_false_for_learningx_host() -> None:
+    """learningx 가 hostname 라벨이면 다운로드 불가(False)."""
+    lec = LectureItem(
+        title="t",
+        item_url="https://learningx.example.com/lti/player",
+        lecture_type=LectureType.MOVIE,
+    )
+    assert lec.is_downloadable is False
+
+
+def test_is_downloadable_false_for_learningx_path_segment() -> None:
+    """learningx 가 경로 세그먼트이면 다운로드 불가(False)."""
+    lec = LectureItem(
+        title="t",
+        item_url="https://canvas.ssu.ac.kr/learningx/lti/launch",
+        lecture_type=LectureType.MOVIE,
+    )
+    assert lec.is_downloadable is False
+
+
+def test_is_downloadable_no_overmatch_learningx_in_query() -> None:
+    """NF-06 핵심: query 에 우연히 'learningx' 가 있는 정상 URL 은 True.
+
+    수정 전 substring 매칭은 이 케이스를 다운로드 불가로 과탐했다.
+    """
+    lec = LectureItem(
+        title="t",
+        item_url="https://cdn.example.com/videos/v.mp4?ref=learningx-portal",
+        lecture_type=LectureType.MP4,
+    )
+    assert lec.is_downloadable is True, "query 내 learningx 로 과탐하면 안 됨"
+
+
+def test_is_downloadable_no_overmatch_learningx_in_filename() -> None:
+    """파일명에 'learningx' 부분 문자열이 있어도 세그먼트가 아니면 True."""
+    lec = LectureItem(
+        title="t",
+        item_url="https://cdn.example.com/videos/mylearningxclip.mp4",
+        lecture_type=LectureType.MP4,
+    )
+    assert lec.is_downloadable is True
+
+
+def test_is_downloadable_false_for_non_video() -> None:
+    """영상이 아닌 항목은 URL 무관하게 다운로드 불가(False)."""
+    lec = LectureItem(
+        title="t",
+        item_url="https://cdn.example.com/doc.pdf",
+        lecture_type=LectureType.ASSIGNMENT,
+    )
+    assert lec.is_downloadable is False
