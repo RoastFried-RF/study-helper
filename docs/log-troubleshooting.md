@@ -156,7 +156,7 @@ grep "단계 실패" logs/study_helper.log
 |-------|----------|------|------|
 | `convert` | `FileNotFoundError: ffmpeg` | ffmpeg 미설치 | Dockerfile apt install 또는 호스트 PATH |
 | `convert` | `RuntimeError: mp3 변환 실패: ...stderr tail...` | ffmpeg 실행 실패 (코덱/입력 손상) | stderr tail 확인해 ffmpeg 옵션 수정 |
-| `transcribe` | `RuntimeError: CUDA out of memory` | Whisper 모델 메모리 부족 | `WHISPER_MODEL` 작게 (large → base) 또는 `mem_limit` 상향 |
+| `transcribe` | 예외 없이 프로세스 OOM kill(로그 갑자기 끊김) | Whisper 모델 RAM 초과 (CPU 전용 — CUDA 아님) | M3: cgroup 한도 인식해 자동 다운그레이드 시도. 그래도 부족 시 `WHISPER_MODEL` 축소 또는 docker `mem_limit` 상향. `WHISPER_CPU_THREADS` 로 CPU 점유 조절 |
 | `transcribe` | `ValueError: Audio is too short` | 무음/저음량 | [src/stt/transcriber.py](../src/stt/transcriber.py) 경계 처리 |
 | `summarize` | `google.genai.errors.APIError` | API 키/쿼터 | `.env` `GOOGLE_API_KEY` 확인, `AI_AGENT=openai` fallback |
 | `summarize` | `TRANSCRIPT_EMPTY` (stage_errors 만) | STT 결과 비어있음 (정상) | 수정 불필요 — 요약 자동 생략 |
