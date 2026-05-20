@@ -330,34 +330,42 @@ class Config:
 
     @classmethod
     def _save_env(cls, keys_to_update: dict) -> None:
-        """지정한 키/값을 .env 파일에 저장(덮어쓰기)한다."""
+        """지정한 키/값을 .env 파일에 저장(덮어쓰기)한다.
+
+        M8: 파일 읽기(readlines) 가 lock 밖이면 save_settings/save_telegram/
+        save_credentials 동시 호출 시 서로의 변경을 덮어쓴다(lost update).
+        `locked_transaction` 으로 **읽기 → merge → 쓰기 전체를 단일 file_lock**
+        안에서 수행한다.
+        SEC-001 / ARCH-011: atomic_write_text — 0o600 + fsync + replace.
+        """
+        from src.util.atomic_write import atomic_write_text, locked_transaction
+
         env_path = _env_path
-        lines = []
 
-        if env_path.exists():
-            with open(env_path, encoding="utf-8") as f:
-                lines = f.readlines()
+        def _load_lines() -> list[str]:
+            if env_path.exists():
+                with open(env_path, encoding="utf-8") as f:
+                    return f.readlines()
+            return []
 
-        updated_keys = set()
-        new_lines = []
-
-        for line in lines:
-            stripped = line.strip()
-            if "=" in stripped and not stripped.startswith("#"):
-                key = stripped.split("=", 1)[0].strip()
-                if key in keys_to_update:
-                    new_lines.append(f"{key}={keys_to_update[key]}\n")
-                    updated_keys.add(key)
-                    continue
-            new_lines.append(line)
-
-        for key, value in keys_to_update.items():
-            if key not in updated_keys:
-                new_lines.append(f"{key}={value}\n")
-
-        # SEC-001 / ARCH-011: atomic_write_text 공용 모듈 사용. 0o600 권한 + fsync + replace 일원화.
-        # 다중 프로세스 동시 저장 (자동 모드 + CLI 스크립트) 시 lost update 방지를 위해 file_lock 으로 감싼다.
-        from src.util.atomic_write import atomic_write_text, file_lock
-
-        with file_lock(env_path):
+        def _merge_and_write(lines: list[str]) -> None:
+            updated_keys = set()
+            new_lines = []
+            for line in lines:
+                stripped = line.strip()
+                if "=" in stripped and not stripped.startswith("#"):
+                    key = stripped.split("=", 1)[0].strip()
+                    if key in keys_to_update:
+                        new_lines.append(f"{key}={keys_to_update[key]}\n")
+                        updated_keys.add(key)
+                        continue
+                new_lines.append(line)
+            for key, value in keys_to_update.items():
+                if key not in updated_keys:
+                    new_lines.append(f"{key}={value}\n")
             atomic_write_text(env_path, "".join(new_lines), mode=0o600)
+
+        # load_fn 으로 lock 안에서 읽고, save_fn 으로 merge+write — read/write 가
+        # 동일 lock 구간. with 본문은 비어있음(추가 mutation 불필요).
+        with locked_transaction(env_path, load_fn=_load_lines, save_fn=_merge_and_write):
+            pass

@@ -102,19 +102,16 @@ def _load_notified() -> set[str]:
     return set()
 
 
-def _save_notified(notified: set[str]) -> None:
-    """deadline_notified.json 을 원자적으로 저장한다 (LOG-003).
+def _write_notified(notified: set[str]) -> None:
+    """deadline_notified.json 을 원자적으로 기록한다 (lock 없음).
 
-    자동 모드 + 수동 deadline check 동시 실행 시 lost update 를 방지하기 위해
-    atomic_write_text + file_lock 공용 모듈을 사용한다.
+    L6: `locked_transaction` 의 save_fn 으로 쓰이므로 자체적으로 file_lock 을
+    잡지 않는다 — 중첩 flock 은 self-deadlock 이기 때문(WS-0 제약).
+    호출자가 `locked_transaction`(또는 file_lock)으로 직렬화를 보장한다.
     """
-    from src.util.atomic_write import atomic_write_text, file_lock
+    from src.util.atomic_write import atomic_write_text
 
-    try:
-        with file_lock(_DEADLINE_FILE):
-            atomic_write_text(_DEADLINE_FILE, json.dumps(sorted(notified)))
-    except Exception as e:
-        _log.warning("deadline_notified.json 저장 실패: %s", e)
+    atomic_write_text(_DEADLINE_FILE, json.dumps(sorted(notified)))
 
 
 def find_approaching_deadlines(
@@ -216,22 +213,18 @@ def check_and_notify_deadlines(
         return 0
 
     from src.notifier.telegram_notifier import notify_deadline_warning
+    from src.util.atomic_write import locked_transaction
 
     notified = _load_notified()
 
     # ARCH-015: find_approaching_deadlines 에 valid_keys 집합을 주입해 강의 순회를
-    # 1회로 통합. stale 키 정리는 루프 종료 후 수행.
+    # 1회로 통합. stale 키 정리는 발송 후 수행.
     valid_keys: set[str] = set()
     items = find_approaching_deadlines(courses, details, notified=notified, collect_keys=valid_keys)
     stale_keys = notified - valid_keys
-    if stale_keys:
-        notified -= stale_keys
-        _save_notified(notified)
 
-    if not items:
-        return 0
-
-    sent_count = 0
+    # 발송은 file_lock **밖**에서 — telegram 네트워크 I/O 동안 파일락을 잡지 않는다.
+    sent_keys: set[str] = set()
     for item in items:
         ok = notify_deadline_warning(
             bot_token=token,
@@ -244,10 +237,22 @@ def check_and_notify_deadlines(
             remaining_hours=item.remaining_hours,
         )
         if ok:
-            notified.add(item.dedup_key)
-            sent_count += 1
+            sent_keys.add(item.dedup_key)
 
-    if sent_count > 0:
-        _save_notified(notified)
+    # L6: stale 제거 + 발송 성공 키 추가를 단일 file_lock 안에서 수행한다.
+    # locked_transaction 이 디스크 최신본을 다시 읽어 merge — 자동 모드와 수동
+    # deadline check 가 동시 실행돼도 서로의 변경을 덮어쓰지 않는다.
+    if stale_keys or sent_keys:
+        def _apply(disk: set[str]) -> None:
+            disk -= stale_keys
+            disk |= sent_keys
 
-    return sent_count
+        try:
+            with locked_transaction(
+                _DEADLINE_FILE, load_fn=_load_notified, save_fn=_write_notified,
+            ) as disk:
+                _apply(disk)
+        except Exception as e:
+            _log.warning("deadline_notified.json 저장 실패: %s", e)
+
+    return len(sent_keys)

@@ -23,11 +23,20 @@ v2 (current):
 
 v1 → v2 자동 마이그레이션은 load 시점에 수행된다.
 저장은 항상 v2 포맷. 원자적 교체(.tmp → rename)로 쓰기 중 크래시를 방어한다.
+
+영속화 모델 (M2/M6):
+    in-memory `entries` 가 SoT. `flush()` 가 유일한 저장 경로 — `locked_transaction`
+    안에서 **디스크 최신본을 다시 읽어** 이번 프로세스가 건드린 entry(`_touched`)·
+    삭제한 entry(`_removed`) 만 merge 한 뒤 원자적으로 쓴다. 따라서 자동 모드와
+    유지보수 스크립트(recover/reconcile)가 동시 실행돼도 서로의 변경을 덮어쓰지
+    않는다(lost update 방지). `maybe_flush()` 는 `_dirty` 누적이 임계를 넘을 때만
+    `flush()` — 강의마다 전체 직렬화하던 O(N²) 비용을 줄인다.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +47,10 @@ from src.downloader.result import REASON_PLAY_QUARANTINED
 from src.logger import get_logger
 
 _log = get_logger("service.progress_store")
+
+# M6: flush 배치 임계 — _dirty 가 이 값 이상 누적되면 maybe_flush() 가 flush().
+# PROGRESS_SAVE_INTERVAL=1 이면 강의마다 저장(기존 per-item 동작).
+_SAVE_INTERVAL = max(1, int(os.environ.get("PROGRESS_SAVE_INTERVAL", "5") or "5"))
 
 
 @dataclass
@@ -58,82 +71,150 @@ class ProgressEntry:
 PLAY_FAIL_QUARANTINE_THRESHOLD = RetryPolicy.PLAY_FAIL_QUARANTINE
 
 
+def _parse_entries(raw: Any) -> dict[str, ProgressEntry]:
+    """auto_progress.json 원본(JSON 파싱 결과)을 entries dict 로 변환한다.
+
+    v1 리스트 / v2 dict 모두 처리. 알 수 없는 포맷은 빈 dict.
+    """
+    # v1: 리스트 → 모든 URL을 "재생 완료, 다운로드/가능 여부 미확인"으로 마이그레이션
+    if isinstance(raw, list):
+        return {
+            url: ProgressEntry(played=True, downloaded=None, downloadable=None)
+            for url in raw
+            if isinstance(url, str)
+        }
+
+    # v2
+    if isinstance(raw, dict) and raw.get("version") == 2:
+        entries_raw = raw.get("entries", {})
+        if isinstance(entries_raw, dict):
+            def _to_int(v: Any) -> int:
+                try:
+                    return int(v) if v is not None else 0
+                except (TypeError, ValueError):
+                    return 0
+
+            return {
+                url: ProgressEntry(
+                    played=bool(data.get("played", False)),
+                    downloaded=data.get("downloaded"),
+                    downloadable=data.get("downloadable"),
+                    reason=data.get("reason"),
+                    ts=str(data.get("ts", "")),
+                    play_fail_count=_to_int(data.get("play_fail_count", 0)),
+                )
+                for url, data in entries_raw.items()
+                if isinstance(url, str) and isinstance(data, dict)
+            }
+
+    # 알 수 없는 포맷 → 안전하게 비움
+    return {}
+
+
+def _read_entries_file(path: Path) -> dict[str, ProgressEntry]:
+    """디스크에서 entries 를 읽어 반환한다 (lock 없음). 부재/파손 시 빈 dict."""
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return _parse_entries(raw)
+
+
+def _serialize_entries(entries: dict[str, ProgressEntry]) -> str:
+    """entries 를 v2 JSON 문자열로 직렬화한다."""
+    payload = {
+        "version": 2,
+        "entries": {url: asdict(entry) for url, entry in entries.items()},
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
 @dataclass
 class ProgressStore:
     """url → ProgressEntry 매핑을 메모리에 보관하고 파일과 동기화한다.
 
-    캐시 일관성은 호출자가 보장한다 (단일 자동 모드 루프 내 단일 인스턴스 사용).
+    in-memory `entries` 가 SoT. 변경은 mark_* / retain_only / remove 로만 하며
+    `flush()` (또는 `maybe_flush()`) 로 디스크에 cross-process 안전하게 반영한다.
     """
 
     path: Path
     entries: dict[str, ProgressEntry] = field(default_factory=dict)
+    # delta 추적 (M2/M6) — flush 시 merge 대상. init/repr 제외.
+    _touched: set[str] = field(default_factory=set, init=False, repr=False)
+    _removed: set[str] = field(default_factory=set, init=False, repr=False)
+    _dirty: int = field(default=0, init=False, repr=False)
+
+    # ── delta 추적 헬퍼 ──────────────────────────────────────
+    def _touch(self, url: str) -> None:
+        """mark_* mutator 가 호출 — 변경된 entry 를 flush merge 대상에 등록."""
+        self._touched.add(url)
+        self._removed.discard(url)
+        self._dirty += 1
+
+    def _mark_removed(self, url: str) -> None:
+        """retain_only/remove 가 호출 — 삭제 의도를 flush merge 대상에 등록."""
+        self._removed.add(url)
+        self._touched.discard(url)
+        self._dirty += 1
 
     # ── 로드 ─────────────────────────────────────────────────
     def load(self) -> None:
-        if not self.path.exists():
-            self.entries = {}
-            return
-        try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            self.entries = {}
-            return
+        """디스크에서 entries 를 읽어 in-memory 상태를 초기화한다.
 
-        # v1: 리스트 → 모든 URL을 "재생 완료, 다운로드/가능 여부 미확인"으로 마이그레이션
-        if isinstance(raw, list):
-            self.entries = {
-                url: ProgressEntry(played=True, downloaded=None, downloadable=None)
-                for url in raw
-                if isinstance(url, str)
-            }
-            return
-
-        # v2
-        if isinstance(raw, dict) and raw.get("version") == 2:
-            entries_raw = raw.get("entries", {})
-            if isinstance(entries_raw, dict):
-                def _to_int(v: Any) -> int:
-                    try:
-                        return int(v) if v is not None else 0
-                    except (TypeError, ValueError):
-                        return 0
-
-                self.entries = {
-                    url: ProgressEntry(
-                        played=bool(data.get("played", False)),
-                        downloaded=data.get("downloaded"),
-                        downloadable=data.get("downloadable"),
-                        reason=data.get("reason"),
-                        ts=str(data.get("ts", "")),
-                        play_fail_count=_to_int(data.get("play_fail_count", 0)),
-                    )
-                    for url, data in entries_raw.items()
-                    if isinstance(url, str) and isinstance(data, dict)
-                }
-                return
-
-        # 알 수 없는 포맷 → 안전하게 비움
-        self.entries = {}
+        load 직후 delta(_touched/_removed/_dirty)는 비어있다 — 디스크와 동기 상태.
+        """
+        self.entries = _read_entries_file(self.path)
+        self._touched.clear()
+        self._removed.clear()
+        self._dirty = 0
 
     # ── 저장 ─────────────────────────────────────────────────
-    def save(self) -> None:
-        """원자적으로 auto_progress.json을 교체한다.
+    def flush(self) -> None:
+        """in-memory delta 를 디스크에 cross-process 안전하게 반영한다.
 
-        ARCH-011: atomic_write_text 공용 모듈로 수렴 (O_EXCL + O_NOFOLLOW + 0o600 + fsync).
-        LOG-009: file_lock 으로 cross-process 직렬화. 자동 모드 + recover 스크립트
-        동시 실행 시 lost update 를 방지한다. POSIX(flock) 는 직렬화 보장,
-        Windows(msvcrt.locking) 는 best-effort advisory.
+        ARCH-011 / LOG-009 / M2: `locked_transaction` 으로 단일 file_lock 안에서
+        디스크 최신본을 다시 읽어, 이번 프로세스가 건드린 entry(`_touched`)·삭제한
+        entry(`_removed`)만 merge 한 뒤 atomic_write 한다. 건드리지 않은 URL 은
+        디스크본을 유지 — 동시 실행 중인 recover/reconcile 의 변경을 보존한다.
+
+        POSIX flock 은 직렬화 보장. Windows 는 best-effort advisory(직렬화 미보장).
         """
-        from src.util.atomic_write import atomic_write_text, file_lock
+        if self._dirty == 0:
+            return
 
-        payload = {
-            "version": 2,
-            "entries": {url: asdict(entry) for url, entry in self.entries.items()},
-        }
-        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        from src.util.atomic_write import locked_transaction
 
-        with file_lock(self.path):
-            atomic_write_text(self.path, serialized, mode=0o600)
+        with locked_transaction(
+            self.path,
+            load_fn=lambda: _read_entries_file(self.path),
+            save_fn=lambda merged: _write_entries_file(self.path, merged),
+        ) as disk:
+            for url in self._touched:
+                entry = self.entries.get(url)
+                if entry is not None:
+                    disk[url] = entry
+            for url in self._removed:
+                disk.pop(url, None)
+            # in-memory 를 merge 결과로 동기화 — 이후 조회가 타 프로세스 변경도 반영.
+            self.entries = dict(disk)
+
+        self._touched.clear()
+        self._removed.clear()
+        self._dirty = 0
+
+    def maybe_flush(self) -> None:
+        """누적 변경(`_dirty`)이 `_SAVE_INTERVAL` 이상이면 flush (M6 배치 저장)."""
+        if self._dirty >= _SAVE_INTERVAL:
+            self.flush()
+
+    def save(self) -> None:
+        """flush() 의 하위호환 alias — 단일 저장 경로(flush)로 수렴.
+
+        호출 시점의 in-memory delta 를 즉시 디스크에 반영한다.
+        """
+        self.flush()
 
     # ── 조회 ─────────────────────────────────────────────────
     def get(self, url: str) -> ProgressEntry | None:
@@ -176,6 +257,7 @@ class ProgressStore:
         e.played = True
         e.play_fail_count = 0
         e.ts = self._now()
+        self._touch(url)
 
     def mark_incomplete(self, url: str) -> None:
         """LMS가 해당 항목을 다시 미완료로 바꾼 경우 store의 played 상태를 해제한다.
@@ -190,6 +272,7 @@ class ProgressStore:
         e.played = False
         e.downloaded = None
         e.ts = self._now()
+        self._touch(url)
 
     def mark_unsupported(self, url: str, reason: str | None = None) -> None:
         e = self.entries.setdefault(url, ProgressEntry())
@@ -198,6 +281,7 @@ class ProgressStore:
         e.downloaded = False
         e.reason = reason
         e.ts = self._now()
+        self._touch(url)
 
     def mark_play_failed(
         self, url: str, threshold: int = PLAY_FAIL_QUARANTINE_THRESHOLD,
@@ -228,6 +312,7 @@ class ProgressStore:
         e = self.entries.setdefault(url, ProgressEntry())
         e.play_fail_count += 1
         e.ts = self._now()
+        self._touch(url)
 
         if e.play_fail_count >= threshold and e.downloadable is not False:
             # 격리 — 더 이상 재생 큐에 넣지 않음. mark_unsupported 와 동등한 effect
@@ -246,6 +331,7 @@ class ProgressStore:
         e.downloadable = True
         e.reason = None
         e.ts = self._now()
+        self._touch(url)
 
     def mark_download_failed(self, url: str, reason: str) -> None:
         e = self.entries.setdefault(url, ProgressEntry())
@@ -255,6 +341,7 @@ class ProgressStore:
         e.downloaded = False
         e.reason = reason
         e.ts = self._now()
+        self._touch(url)
 
     def mark_download_confirmed_from_filesystem(self, url: str) -> None:
         """파일시스템 점검 결과 이미 파일이 존재할 때 사용.
@@ -268,9 +355,13 @@ class ProgressStore:
         e.reason = None
         if not e.ts:
             e.ts = self._now()
+        self._touch(url)
 
     def remove(self, url: str) -> bool:
-        return self.entries.pop(url, None) is not None
+        removed = self.entries.pop(url, None) is not None
+        if removed:
+            self._mark_removed(url)
+        return removed
 
     def retain_only(self, allowed_urls: set[str]) -> int:
         """LMS에서 사라진 항목을 제거한다. 반환값은 제거된 개수.
@@ -284,4 +375,16 @@ class ProgressStore:
         orphan = self.known_urls() - allowed_urls
         for url in orphan:
             del self.entries[url]
+            self._mark_removed(url)
         return len(orphan)
+
+
+def _write_entries_file(path: Path, entries: dict[str, ProgressEntry]) -> None:
+    """entries 를 v2 JSON 으로 원자적으로 기록한다 (lock 없음).
+
+    `locked_transaction` 의 save_fn 으로 쓰이므로 자체 file_lock 을 잡지 않는다
+    (중첩 flock = self-deadlock, WS-0 제약).
+    """
+    from src.util.atomic_write import atomic_write_text
+
+    atomic_write_text(path, _serialize_entries(entries), mode=0o600)
