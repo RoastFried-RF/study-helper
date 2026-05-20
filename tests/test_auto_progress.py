@@ -359,3 +359,35 @@ def test_maybe_flush_batches_writes(tmp_path: Path, monkeypatch):
     reloaded = ps.ProgressStore(path=store.path)
     reloaded.load()
     assert {"a", "b", "c"} <= set(reloaded.entries.keys())
+
+
+def test_remove_then_mark_reactivates_entry(tmp_path: Path):
+    """remove 후 같은 URL 재마킹 시 flush 가 재삽입한다 (_touch 가 _removed 무효화)."""
+    path = tmp_path / "auto_progress.json"
+    store = ProgressStore(path=path)
+    store.mark_played("u")
+    store.flush()
+
+    store.remove("u")          # _removed = {u}
+    store.mark_played("u")     # _touch → _removed.discard(u), _touched = {u}
+    store.flush()
+
+    reloaded = ProgressStore(path=path)
+    reloaded.load()
+    assert reloaded.get("u") is not None
+
+
+def test_mark_then_remove_deletes_entry(tmp_path: Path):
+    """mark 후 remove 시 flush 가 디스크에서 삭제한다 (_mark_removed 가 _touched 무효화)."""
+    path = tmp_path / "auto_progress.json"
+    store = ProgressStore(path=path)
+    store.mark_played("u")
+    store.flush()
+
+    store.mark_download_success("u")  # _touched = {u}
+    store.remove("u")                 # _mark_removed → _touched.discard(u), _removed = {u}
+    store.flush()
+
+    reloaded = ProgressStore(path=path)
+    reloaded.load()
+    assert reloaded.get("u") is None

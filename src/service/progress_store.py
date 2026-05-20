@@ -135,8 +135,11 @@ def _serialize_entries(entries: dict[str, ProgressEntry]) -> str:
 class ProgressStore:
     """url → ProgressEntry 매핑을 메모리에 보관하고 파일과 동기화한다.
 
-    in-memory `entries` 가 SoT. 변경은 mark_* / retain_only / remove 로만 하며
-    `flush()` (또는 `maybe_flush()`) 로 디스크에 cross-process 안전하게 반영한다.
+    in-memory `entries` 는 **작업 상태**다. 변경은 mark_* / retain_only / remove 로만
+    하며 `flush()` (또는 `maybe_flush()`) 로 디스크에 cross-process 안전하게 반영한다.
+    단, SoT 는 영구히 in-memory 가 아니라 **flush 경계에서 디스크와 재수렴**한다 —
+    `flush()` 는 디스크 최신본에 이번 프로세스의 delta 를 merge 한 결과로 `entries` 를
+    교체하므로, flush 직후 `entries` 는 타 프로세스 변경까지 반영한 최신 상태가 된다.
     """
 
     path: Path
@@ -178,6 +181,10 @@ class ProgressStore:
         디스크 최신본을 다시 읽어, 이번 프로세스가 건드린 entry(`_touched`)·삭제한
         entry(`_removed`)만 merge 한 뒤 atomic_write 한다. 건드리지 않은 URL 은
         디스크본을 유지 — 동시 실행 중인 recover/reconcile 의 변경을 보존한다.
+
+        flush 종료 후 `self.entries` 는 merge 결과로 교체된다 — SoT 가 flush 경계에서
+        디스크와 재수렴함을 뜻한다 (class docstring 참조). 이후 조회는 타 프로세스
+        변경까지 반영한 상태를 본다.
 
         POSIX flock 은 직렬화 보장. Windows 는 best-effort advisory(직렬화 미보장).
         """

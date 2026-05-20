@@ -10,6 +10,7 @@ Prompt-injection 방어:
   시스템 프롬프트의 형식 규칙을 넘어서지 못하도록 경계를 둔다.
 """
 
+import contextlib
 from pathlib import Path
 
 # 시스템 프롬프트 — 신뢰 가능 (개발자 정의). STT 텍스트는 여기 삽입하지 않음.
@@ -185,12 +186,11 @@ def _summarize_gemini(api_key: str, model: str, system_prompt: str, user_content
     finally:
         # L4: google-genai Client 는 close() 가 있을 수도/없을 수도 있다.
         # 있으면 명시적으로 닫아 httpx 커넥션 풀을 즉시 정리, 없으면 참조 해제로 대체.
-        try:
+        # cleanup 실패는 치명적이지 않으므로 suppress 로 의도를 명시 (silent except 회피).
+        with contextlib.suppress(Exception):
             _close = getattr(client, "close", None)
             if callable(_close):
                 _close()
-        except Exception:
-            pass
         del client
 
 

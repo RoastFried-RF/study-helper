@@ -74,7 +74,11 @@ def file_lock(path: Path) -> Iterator[None]:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    # SEC: lock 파일 symlink-following 차단 — atomic_write_text 와 동일하게 O_NOFOLLOW.
+    _lock_flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        _lock_flags |= os.O_NOFOLLOW
+    fd = os.open(str(lock_path), _lock_flags, 0o600)
     acquired = False
     try:
         if sys.platform == "win32":
