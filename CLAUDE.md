@@ -50,7 +50,7 @@ torch는 `pyproject.toml`에 포함하지 않음 — Dockerfile에서 CPU wheel�
 - **이 프로젝트에 GUI 의존성 추가 금지**: flet, PyQt5 등 GUI 라이브러리 사용 금지. CUI 전용. GUI는 별도 Electron 프로젝트(study-helper-app)에서 담당.
 - **비디오 셀렉터**: `video.vc-vplay-video1`로 영상 URL 추출. 변경 시 LMS 쪽 변경 확인 필요.
 - **SSOT 재구현 금지**: `Config.get_data_base()` / `get_logs_path()` / `RetryPolicy` / `get_ai_api_key()` / `get_ai_model()` 는 개별 모듈에서 재구현 금지. 수치 튜닝은 `RetryPolicy` 내부 상수만 수정. 상세는 "공용 인프라" 섹션 참조.
-- **원자 쓰기 경유 강제**: `.env`, `auto_progress.json`, `deadline_notified.json` 등 상태 파일은 반드시 `src/util/atomic_write.py` 로만 기록 — `atomic_write_text` + `file_lock`, 또는 load→mutate→save 가 필요하면 `locked_transaction`. 직접 `open(..., "w")` 후 rename 금지.
+- **원자 쓰기 경유 강제**: `.env`, `.secret_key`, `auto_progress.json`, `deadline_notified.json` 등 상태 파일은 반드시 `src/util/atomic_write.py` 로만 기록 — `atomic_write_text` + `file_lock`, 또는 load→mutate→save 가 필요하면 `locked_transaction`. 직접 `open(..., "w")` 후 rename 금지. (`.secret_key` 는 `crypto._load_or_create_key` 가 `file_lock` 안에서 atomic 생성 — cross-process 키 분기 race 방지)
 - **로거 API 선택**: 신규 코드는 `get_logger("이름")` 만 사용 (LOG-SYS-1/4). `logging.getLogger(__name__)` 는 silent log loss 유발이므로 회귀 금지. `SensitiveFilter` 는 반드시 `handler.addFilter` 로 부착 — `logger.addFilter` 는 propagate 된 child 레코드를 놓친다 (Python logging semantics).
 
 ## 설계 의도
@@ -72,7 +72,7 @@ torch는 `pyproject.toml`에 포함하지 않음 — Dockerfile에서 CPU wheel�
 - **경로 해결**: `Config.get_data_base()` (data 루트) · `Config.get_data_path(name)` (data 파일) · `Config.get_logs_path()` (logs 루트). 개별 모듈에서 `Path("/data")` 직접 접근이나 `os.getenv("STUDY_HELPER_DATA_DIR")` 재파싱 금지.
 - **재시도 정책**: `Config.RetryPolicy` — `PLAY` / `DOWNLOAD` / `URL_EXTRACT` / `STREAM` / `TELEGRAM` / `URL_RETRY_WAIT_SEC` / `TELEGRAM_BASE_DELAY` / `BROWSER_RESTART_INTERVAL`. 모듈 내부 `_MAX_*_RETRIES` 로컬 상수 재도입 금지.
 - **AI 키/모델 조회**: `Config.get_ai_api_key()` · `Config.get_ai_model()` — `AI_AGENT == "gemini"` 분기 중복 금지.
-- **원자 쓰기 / 크로스 프로세스 락 / 트랜잭션**: `src/util/atomic_write.py` — `atomic_write_text(path, text, mode=0o600)` (원자 교체), `file_lock(path)` (cross-process flock), `locked_transaction(path, load_fn=, save_fn=)` (load→mutate→save 를 단일 락으로 묶어 lost update 방지 — `progress_store.flush` / `config._save_env` / `deadline_checker` 가 사용). `.env`, `auto_progress.json`, `deadline_notified.json` 모두 이 모듈 사용. 직접 `open(..., "w")` 후 rename 패턴 금지. `locked_transaction` 의 `load_fn`/`save_fn` 안에서 같은 path 의 락 재호출 금지(self-deadlock).
+- **원자 쓰기 / 크로스 프로세스 락 / 트랜잭션**: `src/util/atomic_write.py` — `atomic_write_text(path, text, mode=0o600)` (원자 교체), `file_lock(path)` (cross-process flock), `locked_transaction(path, load_fn=, save_fn=)` (load→mutate→save 를 단일 락으로 묶어 lost update 방지 — `progress_store.flush` / `config._save_env` / `deadline_checker` 가 사용). `.env`, `.secret_key`, `auto_progress.json`, `deadline_notified.json` 모두 이 모듈 사용. 직접 `open(..., "w")` 후 rename 패턴 금지. `locked_transaction` 의 `load_fn`/`save_fn` 안에서 같은 path 의 락 재호출 금지(self-deadlock).
 - **텔레그램 디스패처**: `src/notifier/telegram_dispatch.py` 의 `dispatch_if_configured(notify_fn, **kwargs)` — credential 분기 보일러플레이트 단일화 (ARCH-004). 호출부에서 `Config.get_telegram_credentials()` + 분기 재구현 금지.
 - **TUI 헤더**: `src/ui/_widgets.py` 의 `header_panel(title, ...)` — 중앙 정렬 Rich Panel. 각 화면에서 `Panel(Text(...))` 조립 금지.
 - **STT 모델 해제**: `src/stt/transcriber.py::safe_unload()` — 예외 억제된 unload. 각 호출사이트 `try/import/bare except` 복제 금지.
