@@ -219,3 +219,58 @@ def test_file_present_works_with_marker_fallback(tmp_path: Path):
 
     # course_v2 로 조회해도 fallback 으로 발견
     assert file_present(tmp_path, course_v2, lec, "both") is True
+
+
+# ── NF-07: 빈 DOWNLOAD_RULE fallback 은 AND (both 와 동일) ───────────
+#
+# 버그 시나리오: 규칙 미설정(빈 DOWNLOAD_RULE) 시 fallback 이 `mp4 or mp3`
+# (OR) 라서 mp4 만 있고 mp3 가 없어도 "완료"로 오판정 → 변환/STT 단계가
+# 건너뛰어졌다. 수정 후에는 둘 다 존재할 때만 present(AND).
+
+
+def test_file_present_empty_rule_requires_both(tmp_path: Path):
+    """NF-07: 빈 rule 일 때 mp4 만 있고 mp3 없으면 False (OR fallback 회귀)."""
+    course = _make_course()
+    lec = _make_lec()
+
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp4)  # mp4 만 생성, mp3 없음
+
+    # 수정 전 OR fallback 이면 True 로 오판정 → 변환/STT 건너뜀
+    assert file_present(tmp_path, course, lec, "") is False, (
+        "빈 rule 에서 mp3 누락을 '완료'로 오판정하면 안 됨 (AND fallback)"
+    )
+
+
+def test_file_present_empty_rule_mp3_only_is_false(tmp_path: Path):
+    """NF-07: 빈 rule 일 때 mp3 만 있고 mp4 없어도 False."""
+    course = _make_course()
+    lec = _make_lec()
+
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp3)  # mp3 만 생성
+
+    assert file_present(tmp_path, course, lec, "") is False
+
+
+def test_file_present_empty_rule_both_present_is_true(tmp_path: Path):
+    """NF-07: 빈 rule 도 mp4 + mp3 둘 다 있으면 True (정상 경로 유지)."""
+    course = _make_course()
+    lec = _make_lec()
+
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp4)
+    _touch(mp3)
+
+    assert file_present(tmp_path, course, lec, "") is True
+
+
+def test_file_present_unknown_rule_requires_both(tmp_path: Path):
+    """NF-07: 알 수 없는 rule 값도 보수적으로 AND fallback 을 탄다."""
+    course = _make_course()
+    lec = _make_lec()
+
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp4)
+
+    assert file_present(tmp_path, course, lec, "garbage-rule") is False

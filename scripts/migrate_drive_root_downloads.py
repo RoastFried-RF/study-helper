@@ -52,10 +52,11 @@ def _relative_to_source(file_path: Path, source: Path) -> Path:
 def migrate(source: Path, target: Path, apply: bool) -> tuple[int, int, int]:
     """(이동됨, 건너뜀, 충돌) 개수 반환."""
     if not source.is_dir():
-        print(f"  [오류] source 디렉토리가 없습니다: {source}")
+        # CLI-F1: 정상 종료(exit 0) 경로이므로 [오류] 가 아닌 [안내] 로 표기
+        print(f"  [안내] source 디렉토리가 없습니다 — 이관할 파일 없음: {source}")
         return 0, 0, 0
     if source.resolve() == target.resolve():
-        print("  [오류] source 와 target 이 동일합니다. 마이그레이션 불필요.")
+        print("  [안내] source 와 target 이 동일합니다 — 마이그레이션 불필요.")
         return 0, 0, 0
 
     moved = skipped = conflict = 0

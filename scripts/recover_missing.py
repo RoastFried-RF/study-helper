@@ -18,6 +18,11 @@
 구조적으로 다운로드 불가능한 항목(learningx)은 자동 제외된다.
 수집·실행·집계 로직은 src/service/recover_pipeline.py가 단일 소스로 제공한다.
 ProgressStore 는 복구 성공/실패 시 자동 업데이트되어 auto 모드와의 drift 방지.
+
+종료 코드 (CLI-F3):
+    0  정상 종료 — 누락 없음 / dry-run / 사용자 취소 / 전건 복구 성공
+    1  사전 조건 실패 — 자격증명 미설정, 지정한 course_id 미발견
+    2  부분 실패 — 복구를 실행했으나 일부 항목이 실패 (success != total)
 """
 
 from __future__ import annotations
@@ -54,6 +59,13 @@ _log = get_logger("recover_missing_cli")
 
 
 async def main() -> int:
+    """누락 다운로드 복구 진입점.
+
+    반환값(프로세스 종료 코드, CLI-F3):
+        0  누락 없음 / dry-run / 사용자 취소 / 전건 복구 성공
+        1  사전 조건 실패 (자격증명 미설정, course_id 미발견)
+        2  복구 실행 후 일부 항목 실패 (success != total)
+    """
     parser = argparse.ArgumentParser(description="누락 다운로드 복구")
     parser.add_argument("--dry-run", action="store_true", help="목록만 출력하고 종료")
     parser.add_argument("--course", type=str, default=None, help="특정 course_id만 대상")
@@ -197,12 +209,10 @@ async def main() -> int:
         return 0 if report.success == report.total else 2
     finally:
         await scraper.close()
-        try:
-            from src.stt.transcriber import unload_model
+        # CLI-F6: safe_unload() SSOT — 예외 억제 unload 헬퍼 재사용
+        from src.stt.transcriber import safe_unload
 
-            unload_model()
-        except Exception:
-            pass
+        safe_unload()
 
 
 if __name__ == "__main__":

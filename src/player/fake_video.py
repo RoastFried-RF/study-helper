@@ -53,6 +53,11 @@ async def create_fake_webm(duration_sec: float) -> bytes:
             env={"PATH": os.environ.get("PATH", "")},
         )
         await proc.communicate()
-        if not output_path.exists() or output_path.stat().st_size == 0:
-            raise RuntimeError("ffmpeg 더미 영상 생성 실패")
+        # R2-12: returncode 미검사 시 ffmpeg 가 비정상 종료해도 부분 생성된
+        # 손상 webm 을 그대로 반환할 수 있다. returncode != 0 또는 산출물
+        # 부재/0바이트면 손상으로 간주하고 명시적으로 실패시킨다.
+        if proc.returncode != 0 or not output_path.exists() or output_path.stat().st_size == 0:
+            raise RuntimeError(
+                f"ffmpeg 더미 영상 생성 실패 (returncode={proc.returncode})"
+            )
         return output_path.read_bytes()

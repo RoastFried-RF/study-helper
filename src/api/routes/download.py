@@ -28,6 +28,10 @@ _ALLOWED_WHISPER_MODELS = {"tiny", "base", "small", "medium", "large"}
 _ALLOWED_AI_AGENTS = {"gemini", "openai"}
 
 router = APIRouter()
+# WS 전용 라우터 — 라우터 레벨 _verify_token dependency(HTTP Authorization 헤더 기반)를
+# 적용하지 않는다. WebSocket 은 핸들러 내부에서 첫 메시지 기반 토큰 인증을 수행하므로,
+# 헤더 dependency 를 같이 걸면 헤더 없는 WS 연결이 401 로 막혀 핸들러 인증이 dead code 가 된다.
+ws_router = APIRouter()
 
 
 class ConvertRequest(BaseModel):
@@ -101,7 +105,13 @@ async def convert(body: ConvertRequest) -> dict[str, str]:
     """
     mp4 = _validate_path_in_download_dir(body.mp4_path)
     loop = asyncio.get_running_loop()
-    mp3_path = await loop.run_in_executor(None, lambda: convert_to_mp3(mp4))
+    try:
+        mp3_path = await loop.run_in_executor(None, lambda: convert_to_mp3(mp4))
+    except Exception as e:
+        # SEC-005: ffmpeg stderr/경로가 RuntimeError 메시지에 포함될 수 있어
+        # 클라이언트에는 고정 코드만 노출. 상세는 서버 로그에만.
+        _log.error("convert 오류: %s: %s", type(e).__name__, e, exc_info=False)
+        raise HTTPException(status_code=500, detail="CONVERT_FAILED") from None
     if body.delete_original:
         mp4.unlink(missing_ok=True)
     return {"mp3_path": str(mp3_path)}
@@ -148,7 +158,7 @@ async def summarize(body: SummarizeRequest) -> dict[str, str]:
     return {"summary_path": str(summary_path)}
 
 
-@router.websocket("/pipeline")
+@ws_router.websocket("/pipeline")
 async def pipeline_ws(ws: WebSocket) -> None:
     """다운로드 후속 파이프라인을 WebSocket으로 실행한다.
 
@@ -165,7 +175,19 @@ async def pipeline_ws(ws: WebSocket) -> None:
         _api_token = os.getenv("STUDY_HELPER_API_TOKEN", "")
         _allow_no_token = os.getenv("STUDY_HELPER_API_ALLOW_NO_TOKEN", "") == "1"
         if _api_token:
-            auth_msg = await ws.receive_json()
+            # API-F1: 인증 전 첫 메시지가 비-JSON 이면 인증 실패로 명확히 분기한다.
+            # try 없이 두면 ValueError 가 일반 Exception 핸들러로 떨어져
+            # PIPELINE_ERROR 로 오표기된다.
+            try:
+                auth_msg = await ws.receive_json()
+            except (ValueError, TypeError):
+                await ws.send_json({"type": "error", "message": "INVALID_AUTH_MESSAGE"})
+                await ws.close(code=4003)
+                return
+            if not isinstance(auth_msg, dict):
+                await ws.send_json({"type": "error", "message": "INVALID_AUTH_MESSAGE"})
+                await ws.close(code=4003)
+                return
             _client_token = auth_msg.get("token") or ""
             if not secrets.compare_digest(_client_token, _api_token):
                 await ws.send_json({"type": "error", "message": "인증 실패"})
@@ -178,7 +200,15 @@ async def pipeline_ws(ws: WebSocket) -> None:
 
         data = await ws.receive_json()
         req = PipelineRequest(**data)
-        _validate_path_in_download_dir(req.mp4_path)
+        # API-F2: WS 컨텍스트에서는 HTTPException 이 HTTP 400 으로 변환되지 않아
+        # 일반 Exception 핸들러로 떨어져 PATH 오류가 PIPELINE_ERROR 로 오표기된다.
+        # 경로 검증을 명시 분기로 처리해 PATH_INVALID 코드 + close(4003) 를 보낸다.
+        try:
+            _validate_path_in_download_dir(req.mp4_path)
+        except HTTPException:
+            await ws.send_json({"type": "error", "message": "PATH_INVALID"})
+            await ws.close(code=4003)
+            return
 
         async def _on_progress(p: PipelineProgress):
             await ws.send_json(

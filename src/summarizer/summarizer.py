@@ -13,6 +13,13 @@ Prompt-injection 방어:
 import contextlib
 from pathlib import Path
 
+from src.logger import get_logger
+
+_log = get_logger("summarizer")
+
+# NEW-02: depth 상한 도달로 통합 입력이 절단됐을 때 결과물 말미에 붙이는 마커.
+_TRUNCATION_MARKER = "\n\n(요약 길이 초과로 일부 절단됨)"
+
 # 시스템 프롬프트 — 신뢰 가능 (개발자 정의). STT 텍스트는 여기 삽입하지 않음.
 _SYSTEM_PROMPT = """\
 당신은 대학교 강의 내용을 정리하는 전문 학습 보조 AI입니다.
@@ -111,8 +118,17 @@ def summarize(txt_path: Path, agent: str, api_key: str, model: str, extra_prompt
     return out_path
 
 
-def _chunk_text(text: str, max_chars: int = _MAX_CHUNK_CHARS, overlap: int = _CHUNK_OVERLAP) -> list[str]:
-    """긴 텍스트를 max_chars 단위 청크로 분할한다 (경계 overlap 포함)."""
+def _chunk_text(
+    text: str,
+    max_chars: int = _MAX_CHUNK_CHARS - len(_USER_PROMPT_HEADER),
+    overlap: int = _CHUNK_OVERLAP,
+) -> list[str]:
+    """긴 텍스트를 max_chars 단위 청크로 분할한다 (경계 overlap 포함).
+
+    NEW-01: 각 청크는 호출 직전 `_USER_PROMPT_HEADER` prefix 가 붙으므로,
+    기본 `max_chars` 를 헤더 길이만큼 줄여 prefix 포함 후에도 `_MAX_CHUNK_CHARS`
+    상한을 넘지 않게 한다.
+    """
     if len(text) <= max_chars:
         return [text]
     step = max(1, max_chars - overlap)  # overlap >= max_chars 인 잘못된 설정 방어
@@ -157,9 +173,25 @@ def _summarize_chunked(
         # 부분 요약이 여전히 길다 — 한 단계 더 통합 (재귀, depth 상한 보호).
         return _summarize_chunked(agent, api_key, model, system_prompt, merged, depth + 1)
 
-    # 통합 1회 — 부분 요약들을 하나의 일관된 요약으로. depth 상한 도달 시 절단.
-    merge_input = _MERGE_INSTRUCTION + merged[:_MAX_CHUNK_CHARS]
-    return _call_summary(agent, api_key, model, system_prompt, merge_input)
+    # 통합 1회 — 부분 요약들을 하나의 일관된 요약으로.
+    # NEW-01: 절단 상한은 `_MERGE_INSTRUCTION` prefix 길이를 차감해 계산,
+    #         prefix 포함 후에도 `_MAX_CHUNK_CHARS` 를 넘지 않게 한다.
+    merge_budget = _MAX_CHUNK_CHARS - len(_MERGE_INSTRUCTION)
+    truncated = len(merged) > merge_budget
+    merge_input = _MERGE_INSTRUCTION + merged[:merge_budget]
+    result = _call_summary(agent, api_key, model, system_prompt, merge_input)
+
+    # NEW-02: depth 상한 도달 등으로 통합 입력이 절단된 경우, 조용히
+    # 후반부 요약을 잃지 않도록 로그 경고 + 결과물 말미에 절단 마커를 남긴다.
+    if truncated:
+        _log.warning(
+            "요약 통합 입력 절단 — merged=%d자 > 상한 %d자 (depth=%d). "
+            "강의 후반부 일부가 최종 요약에서 누락될 수 있음.",
+            len(merged), merge_budget, depth,
+        )
+        if result and _TRUNCATION_MARKER not in result:
+            result = result + _TRUNCATION_MARKER
+    return result
 
 
 def _summarize_gemini(api_key: str, model: str, system_prompt: str, user_content: str) -> str:

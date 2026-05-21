@@ -44,3 +44,47 @@ def test_convert_to_mp3_ffmpeg_failure(tmp_path):
         mock_run.return_value = MagicMock(returncode=1, stderr="encoding error")
         with pytest.raises(RuntimeError, match="mp3 변환 실패"):
             convert_to_mp3(mp4)
+
+
+# ── NEW-05: ffmpeg 실패 시 비-0 크기 부분 mp3 도 삭제 ────────────────────
+
+
+def test_convert_failure_removes_nonzero_partial_mp3(tmp_path):
+    """NEW-05: ffmpeg 실패 시 비어있지 않은(손상) 부분 mp3 도 삭제돼야 한다.
+
+    수정 전: st_size == 0 인 부분 파일만 삭제 → 비-0 손상 mp3 가 잔존해
+    다음 실행의 overwrite=False skip 가드가 깨진 파일을 정상으로 오인.
+    subprocess.run 이 returncode=1 을 반환하기 전, ffmpeg 가 만들었을 법한
+    비-0 크기 부분 mp3 를 미리 생성해 둔다.
+    """
+    mp4 = tmp_path / "video.mp4"
+    mp4.write_bytes(b"fake")
+    mp3 = mp4.with_suffix(".mp3")
+
+    def _fake_run(*args, **kwargs):
+        # ffmpeg 가 일부만 인코딩하고 실패한 상황 — 비-0 크기 부분 파일 잔존.
+        mp3.write_bytes(b"partial broken mp3 data" * 10)
+        return MagicMock(returncode=1, stderr="encoding error")
+
+    with patch("subprocess.run", side_effect=_fake_run):
+        with pytest.raises(RuntimeError, match="mp3 변환 실패"):
+            convert_to_mp3(mp4)
+
+    assert not mp3.exists(), "비-0 크기 손상 부분 mp3 가 삭제돼야 함 (NEW-05)"
+
+
+def test_convert_failure_removes_zero_size_partial_mp3(tmp_path):
+    """ffmpeg 실패 시 0-byte 부분 mp3 도 여전히 삭제돼야 한다 (회귀 방지)."""
+    mp4 = tmp_path / "video.mp4"
+    mp4.write_bytes(b"fake")
+    mp3 = mp4.with_suffix(".mp3")
+
+    def _fake_run(*args, **kwargs):
+        mp3.write_bytes(b"")  # 0-byte 부분 파일
+        return MagicMock(returncode=1, stderr="encoding error")
+
+    with patch("subprocess.run", side_effect=_fake_run):
+        with pytest.raises(RuntimeError, match="mp3 변환 실패"):
+            convert_to_mp3(mp4)
+
+    assert not mp3.exists(), "0-byte 부분 mp3 도 삭제돼야 함"

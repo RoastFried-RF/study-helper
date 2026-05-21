@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import threading
 
 from rich.console import Console
 from rich.live import Live
@@ -23,6 +24,34 @@ from src.updater import check_update
 console = Console()
 
 _MAX_LOGIN_ATTEMPTS = 3
+
+
+async def _await_enter(prompt: str = "\n  Enter를 눌러 계속...") -> None:
+    """blocking `input()` 을 1회용 daemon 스레드 + asyncio.Future 로 대기한다.
+
+    CLI-F5: `run_in_executor(None, input)` 의 기본 ThreadPoolExecutor 는
+    비-daemon 스레드라, `input()` 에 묶인 채 Ctrl+C 가 오면 인터프리터 종료
+    시 executor join 이 hang 한다. 반복마다 새로 만드는 **1회용 daemon
+    스레드**(영구 루프 아님)로 stdin 을 1줄만 읽어, 종료 hang 을 막으면서도
+    stdin 을 영구 독점하지 않는다.
+    docs/solutions/daemon-stdin-reader-steals-input.md 패턴.
+    """
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[str] = loop.create_future()
+
+    def _read_one() -> None:
+        try:
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            line = sys.stdin.readline()
+        except Exception:
+            line = ""
+        loop.call_soon_threadsafe(
+            lambda: fut.set_result(line) if not fut.done() else None
+        )
+
+    threading.Thread(target=_read_one, daemon=True).start()
+    await fut
 
 
 async def run():
@@ -86,7 +115,11 @@ async def run():
         )
     except Exception as e:
         console.print(f"\n  [bold red]과목 목록 로드 실패:[/bold red] {e}")
-        await scraper.close()
+        # CLI-F4: close() 예외가 의도된 종료 경로(sys.exit)를 우회하지 않도록 흡수
+        try:
+            await scraper.close()
+        except Exception:
+            pass
         sys.exit(1)
 
     # ── 3.5. 마감 임박 알림 체크 ─────────────────────────────────
@@ -135,17 +168,18 @@ async def run():
             if action == LectureAction.PLAY:
                 success, has_error = await run_player(scraper.page, lec, debug=False)
                 if success:
+                    # CLI-F14: CLI는 LMS를 SoT로 삼아 ProgressStore 미연동 (의도) — 메모리만 갱신
                     lec.completion = "completed"
                     await _tg_notify_playback_complete(selected.long_name, lec)
                 else:
                     await _tg_notify_playback_error(selected.long_name, lec, failed=has_error)
-                await asyncio.get_running_loop().run_in_executor(None, lambda: input("\n  Enter를 눌러 계속..."))
+                await _await_enter()
             elif action == LectureAction.DOWNLOAD:
                 rule = Config.DOWNLOAD_RULE or "both"
                 audio_only = rule == "audio"
                 both = rule == "both"
                 await run_download(scraper.page, lec, selected, audio_only=audio_only, both=both)
-                await asyncio.get_running_loop().run_in_executor(None, lambda: input("\n  Enter를 눌러 계속..."))
+                await _await_enter()
     except (KeyboardInterrupt, asyncio.CancelledError):
         console.print("\n  [dim]종료 중...[/dim]")
     finally:

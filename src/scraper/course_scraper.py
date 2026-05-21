@@ -364,7 +364,7 @@ class CourseScraper:
 
         top_divs = await module_list.query_selector_all(":scope > div")
         weeks = []
-        for div in top_divs:
+        for div_idx, div in enumerate(top_divs):
             header = await div.query_selector(".xnmb-module-outer-wrapper")
             if not header:
                 continue
@@ -372,10 +372,15 @@ class CourseScraper:
             title_el = await header.query_selector(".xnmb-module-title")
             title = (await title_el.text_content()).strip() if title_el else ""
 
-            week_num = len(weeks) + 1
+            # R2-06: 제목에 "N주차" 가 있으면 그 번호를 사용.
+            # 없을 때의 fallback 은 `len(weeks)+1` 대신 top_divs 의 원본
+            # enumerate 인덱스(1-based)를 쓴다 — header 부재로 skip 된 div 가
+            # 있으면 `len(weeks)` 기반 fallback 은 실제 위치와 어긋난다.
             match = re.search(r"(\d+)주차", title)
             if match:
                 week_num = int(match.group(1))
+            else:
+                week_num = div_idx + 1
 
             items = await div.query_selector_all(".xnmb-module_item-outer-wrapper")
             lectures = []

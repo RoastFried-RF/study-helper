@@ -4,6 +4,8 @@
 백그라운드 재생 진행 상태를 rich Progress bar로 표시한다.
 """
 
+import asyncio
+
 from rich.console import Console
 from rich.live import Live
 from rich.progress import (
@@ -58,13 +60,19 @@ def _tg_playback_error(lec: LectureItem, failed: bool = True) -> None:
     )
 
 
-async def run_player(page, lec: LectureItem, debug: bool = False) -> tuple[bool, bool]:
+async def run_player(
+    page,
+    lec: LectureItem,
+    debug: bool = False,
+    stop_event: asyncio.Event | None = None,
+) -> tuple[bool, bool]:
     """
     강의를 백그라운드 재생하고 CUI로 진행 상태를 표시한다.
 
     Args:
         page: CourseScraper._page (Playwright Page)
         lec:  재생할 LectureItem
+        stop_event: 설정 시 재생 루프가 즉시 중단 (자동 모드 종료 신호 전파용)
 
     Returns:
         (success, has_error)
@@ -144,6 +152,7 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> tuple[bool,
             debug=True,  # 항상 로그 수집 (오류 시 파일로 저장)
             fallback_duration=estimated_duration,
             log_fn=_log,
+            stop_event=stop_event,
         )
 
     console.print()

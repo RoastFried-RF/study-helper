@@ -269,11 +269,38 @@ class Config:
         gemini_model: str = "",
         summary_prompt_extra: str = "",
     ) -> None:
-        """설정 항목을 .env 파일에 저장한다."""
+        """설정 항목을 .env 파일에 저장한다.
+
+        R2-02 / NEW-07: 파일 쓰기(`_save_env`)가 락으로 보호되므로
+        디스크 기록이 실패하면 예외가 전파된다. 클래스 변수 대입을
+        `_save_env` **성공 후**로 미뤄, 파일 쓰기 실패 시 메모리(클래스
+        변수)와 디스크(.env)가 불일치하는 것을 방지한다.
+        """
+        stt_enabled_str = "true" if stt_enabled else "false"
+        ai_enabled_str = "true" if ai_enabled else "false"
+
+        to_save: dict = {
+            "DOWNLOAD_DIR": download_dir,
+            "DOWNLOAD_RULE": download_rule,
+            "STT_ENABLED": stt_enabled_str,
+            "AI_ENABLED": ai_enabled_str,
+            "AI_AGENT": ai_agent,
+            "SUMMARY_PROMPT_EXTRA": summary_prompt_extra,
+        }
+        if gemini_model:
+            to_save["GEMINI_MODEL"] = gemini_model
+        if ai_enabled and ai_agent == "gemini":
+            to_save["GOOGLE_API_KEY"] = encrypt(api_key) if api_key else ""
+        elif ai_enabled and ai_agent == "openai":
+            to_save["OPENAI_API_KEY"] = encrypt(api_key) if api_key else ""
+
+        # 디스크 기록 성공 후에만 메모리(클래스 변수) 갱신
+        cls._save_env(to_save)
+
         cls.DOWNLOAD_DIR = download_dir
         cls.DOWNLOAD_RULE = download_rule
-        cls.STT_ENABLED = "true" if stt_enabled else "false"
-        cls.AI_ENABLED = "true" if ai_enabled else "false"
+        cls.STT_ENABLED = stt_enabled_str
+        cls.AI_ENABLED = ai_enabled_str
         cls.AI_AGENT = ai_agent
         cls.SUMMARY_PROMPT_EXTRA = summary_prompt_extra
         if gemini_model:
@@ -284,49 +311,46 @@ class Config:
         elif ai_enabled and ai_agent == "openai":
             cls.OPENAI_API_KEY = api_key
 
-        to_save: dict = {
-            "DOWNLOAD_DIR": download_dir,
-            "DOWNLOAD_RULE": download_rule,
-            "STT_ENABLED": cls.STT_ENABLED,
-            "AI_ENABLED": cls.AI_ENABLED,
-            "AI_AGENT": ai_agent,
-            "SUMMARY_PROMPT_EXTRA": summary_prompt_extra,
-        }
-        if gemini_model:
-            to_save["GEMINI_MODEL"] = gemini_model
-        if ai_enabled and ai_agent == "gemini":
-            to_save["GOOGLE_API_KEY"] = encrypt(api_key) if api_key else ""
-        elif ai_enabled and ai_agent == "openai":
-            to_save["OPENAI_API_KEY"] = encrypt(api_key) if api_key else ""
-        cls._save_env(to_save)
-
     @classmethod
     def save_telegram(cls, enabled: bool, bot_token: str, chat_id: str, auto_delete: bool) -> None:
-        """텔레그램 설정을 .env 파일에 저장한다."""
-        cls.TELEGRAM_ENABLED = "true" if enabled else "false"
-        cls.TELEGRAM_BOT_TOKEN = bot_token
-        cls.TELEGRAM_CHAT_ID = chat_id
-        cls.TELEGRAM_AUTO_DELETE = "true" if auto_delete else "false"
+        """텔레그램 설정을 .env 파일에 저장한다.
+
+        R2-02 / NEW-07: 디스크 기록 성공 후에만 클래스 변수를 갱신해
+        파일 쓰기 실패 시 메모리·디스크 불일치를 방지한다.
+        """
+        enabled_str = "true" if enabled else "false"
+        auto_delete_str = "true" if auto_delete else "false"
+
         cls._save_env(
             {
-                "TELEGRAM_ENABLED": cls.TELEGRAM_ENABLED,
+                "TELEGRAM_ENABLED": enabled_str,
                 "TELEGRAM_BOT_TOKEN": encrypt(bot_token) if bot_token else "",
                 "TELEGRAM_CHAT_ID": chat_id,
-                "TELEGRAM_AUTO_DELETE": cls.TELEGRAM_AUTO_DELETE,
+                "TELEGRAM_AUTO_DELETE": auto_delete_str,
             }
         )
 
+        cls.TELEGRAM_ENABLED = enabled_str
+        cls.TELEGRAM_BOT_TOKEN = bot_token
+        cls.TELEGRAM_CHAT_ID = chat_id
+        cls.TELEGRAM_AUTO_DELETE = auto_delete_str
+
     @classmethod
     def save_credentials(cls, user_id: str, password: str) -> None:
-        """계정 정보를 암호화해서 .env 파일에 저장"""
-        cls.LMS_USER_ID = user_id
-        cls.LMS_PASSWORD = password
+        """계정 정보를 암호화해서 .env 파일에 저장.
+
+        R2-02 / NEW-07: 디스크 기록 성공 후에만 클래스 변수를 갱신해
+        파일 쓰기 실패 시 메모리·디스크 불일치를 방지한다.
+        """
         cls._save_env(
             {
                 "LMS_USER_ID": encrypt(user_id),
                 "LMS_PASSWORD": encrypt(password),
             }
         )
+
+        cls.LMS_USER_ID = user_id
+        cls.LMS_PASSWORD = password
 
     @classmethod
     def _save_env(cls, keys_to_update: dict) -> None:
@@ -342,6 +366,33 @@ class Config:
 
         env_path = _env_path
 
+        def _format_value(value) -> str:
+            """COD-N02: `.env` 1줄 = `KEY=value` 무결성 보장.
+
+            value 에 newline 이나 `KEY=value` 패턴이 들어가면 다음 줄로
+            번지거나 의도치 않은 키가 삽입될 수 있다 (`SUMMARY_PROMPT_EXTRA`
+            등 자유 텍스트). 줄바꿈/특수문자가 포함되면 큰따옴표로 quoting
+            하여 python-dotenv 가 단일 값으로 안전하게 파싱하도록 한다.
+            python-dotenv 는 따옴표 안의 `\\n` 이스케이프를 실제 개행으로
+            복원하므로 값 자체는 손실 없이 round-trip 된다.
+            """
+            text = str(value)
+            # newline / carriage return / 따옴표 / 백슬래시 / 선행·후행 공백이
+            # 있으면 quoting 필요. 없으면 그대로 (기존 포맷 유지).
+            needs_quote = (
+                any(c in text for c in "\n\r\"\\")
+                or text != text.strip()
+            )
+            if not needs_quote:
+                return text
+            escaped = (
+                text.replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("\r", "\\r")
+                .replace("\n", "\\n")
+            )
+            return f'"{escaped}"'
+
         def _load_lines() -> list[str]:
             if env_path.exists():
                 with open(env_path, encoding="utf-8") as f:
@@ -356,13 +407,13 @@ class Config:
                 if "=" in stripped and not stripped.startswith("#"):
                     key = stripped.split("=", 1)[0].strip()
                     if key in keys_to_update:
-                        new_lines.append(f"{key}={keys_to_update[key]}\n")
+                        new_lines.append(f"{key}={_format_value(keys_to_update[key])}\n")
                         updated_keys.add(key)
                         continue
                 new_lines.append(line)
             for key, value in keys_to_update.items():
                 if key not in updated_keys:
-                    new_lines.append(f"{key}={value}\n")
+                    new_lines.append(f"{key}={_format_value(value)}\n")
             atomic_write_text(env_path, "".join(new_lines), mode=0o600)
 
         # load_fn 으로 lock 안에서 읽고, save_fn 으로 merge+write — read/write 가

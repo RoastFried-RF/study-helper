@@ -117,11 +117,23 @@ def _load_or_create_key() -> bytes:
     _try_keyring_save(key)
 
     # 파일에도 저장 (Docker/CLI fallback)
+    # NEW-03: cross-process 키 race 방지. API 서버 + CLI 동시 첫 기동 시
+    # 각자 새 키를 생성해 파일을 덮어쓰면 먼저 암호화한 .env 값을 영구
+    # 복호화할 수 없다. file_lock 으로 직렬화하고, 락 안에서 "다시 읽기"
+    # double-check 로 다른 프로세스가 먼저 만든 키를 채택한다.
     key_file = _resolve_key_file()
     try:
+        from src.util.atomic_write import atomic_write_text, file_lock
+
         key_file.parent.mkdir(parents=True, exist_ok=True)
-        key_file.write_bytes(key)
-        key_file.chmod(0o600)
+        with file_lock(key_file):
+            # double-check — 락 대기 중 다른 프로세스가 키를 만들었으면 그것을 채택
+            if key_file.exists() and key_file.is_file():
+                existing = key_file.read_bytes().strip()
+                if existing:
+                    _try_keyring_save(existing)
+                    return existing
+            atomic_write_text(key_file, key.decode(), mode=0o600)
     except OSError:
         pass  # Windows chmod 또는 읽기 전용 파일시스템
     return key
@@ -156,14 +168,30 @@ def decrypt(value: str) -> str:
     """
     'enc:<base64>' 형태의 값을 복호화한다.
     접두사가 없으면 평문 그대로 반환한다 (하위 호환).
-    복호화 실패 시 빈 문자열 반환.
+    토큰 복호화 실패(`InvalidToken`) 시에만 빈 문자열을 반환한다.
+
+    NEW-04/API-F6: 키 인프라 오류(키 손상 `ValueError`, 파일 I/O `OSError` 등)는
+    `_fernet()` 호출을 try 밖으로 빼서 흡수하지 않는다. 이를 빈 문자열로
+    삼키면 "설정 없음" 으로 오분류되어 사용자가 재입력 → 새 키가 기존 키를
+    덮어쓰는 연쇄가 발생한다. 키 인프라 오류는 로그를 남기고 재raise 한다.
+    `except (InvalidToken, Exception)` 의 `InvalidToken` 명시는 죽은 코드라
+    제거하고 `except InvalidToken` 으로 좁힌다.
     """
     if not value.startswith(_PREFIX):
         return value
     token = value[len(_PREFIX) :]
+    # _fernet() 는 키 로드/생성 I/O 를 포함 — try 밖에서 호출해 키 인프라
+    # 오류(ValueError/OSError 등)가 토큰 복호화 실패와 섞이지 않게 한다.
     try:
-        return _fernet().decrypt(token.encode()).decode()
-    except (InvalidToken, Exception):
+        fernet = _fernet()
+    except Exception:
+        from src.logger import get_logger
+
+        get_logger("crypto").error("암호화 키 로드 실패 — 복호화 불가", exc_info=True)
+        raise
+    try:
+        return fernet.decrypt(token.encode()).decode()
+    except InvalidToken:
         return ""
 
 

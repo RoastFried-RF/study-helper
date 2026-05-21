@@ -87,10 +87,13 @@ def convert_to_mp3(mp4_path: Path, mp3_path: Path | None = None, overwrite: bool
         raise FileNotFoundError("ffmpeg가 설치되어 있지 않습니다. ffmpeg를 먼저 설치해주세요.") from None
 
     if result.returncode != 0:
-        # 실패 시 부분 생성된 mp3 정리 — 다음 실행에서 overwrite=False 가드가
-        # 깨진 파일을 정상 파일로 오인하지 않도록 한다.
+        # NEW-05: 실패 시 이번 실행이 생성한 부분 mp3 를 size 무관하게 정리한다.
+        # 기존 `st_size == 0` 조건은 비-0 손상 mp3 를 남겨, 다음 실행의
+        # overwrite=False skip 가드가 깨진 파일을 정상 파일로 오인하게 했다.
+        # 단, ffmpeg `-n` 플래그 덕에 기존 정상 mp3 가 있으면 ffmpeg 자체가
+        # 그 파일을 건드리지 않으므로(생성 거부) 사용자 파일 삭제 위험은 없다.
         try:
-            if mp3_path.exists() and mp3_path.stat().st_size == 0:
+            if mp3_path.exists():
                 mp3_path.unlink()
         except OSError:
             pass

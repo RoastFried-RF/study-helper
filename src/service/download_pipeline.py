@@ -140,7 +140,16 @@ async def run_pipeline(
         on_progress:    진행 콜백
 
     Returns:
-        PipelineResult
+        PipelineResult — `success` 의 의미 (SVC-F6):
+            `success=True` 는 **요청된 모든 단계(변환/STT/요약/알림)가 빠짐없이
+            성공**했음을 뜻한다. CONVERT 뿐 아니라 STT/요약/알림 중 하나라도
+            실패하면 `success=False` 가 되며, 실패 단계는 `stage_errors` 에
+            기록된다 (`success == (not stage_errors)` 불변식).
+
+            다운로드/변환 자체의 성공 여부는 `success` 와 별개로 판단할 수 있다:
+            `result.mp4_path` / `result.mp3_path` 가 채워져 있으면 파일은
+            확보된 것이다. 따라서 호출자는 "STT/요약만 실패"와 "파일 미확보"를
+            `success` + 파일 경로 조합으로 구분해야 한다 (R2-11 참조).
     """
     result = PipelineResult(success=True, mp4_path=mp4_path)
 
@@ -275,6 +284,24 @@ async def run_pipeline(
             _log.error("notify 단계 실패: %s: %s", type(e).__name__, e, exc_info=True)
             result.stage_errors["notify"] = type(e).__name__
             result.stage_messages["notify"] = f"{type(e).__name__}: {e}"
+
+    # SVC-F6: success 의미 통일 — CONVERT 만 success=False 로 두던 비대칭을 제거.
+    # STT/요약/알림 단계가 하나라도 실패하면 stage_errors 에 기록되므로,
+    # stage_errors 가 비어있지 않으면 success=False 로 통일한다
+    # (success == (not stage_errors) 불변식).
+    # 단 TRANSCRIPT_EMPTY 는 무음/저음량 영상에 대한 의도적 "요약 생략" 센티넬
+    # (실패 아님) 이므로 실패 판정에서 제외 — 파일 확보는 성공으로 본다.
+    _real_errors = {
+        stage: code
+        for stage, code in result.stage_errors.items()
+        if code != "TRANSCRIPT_EMPTY"
+    }
+    if _real_errors and result.success:
+        result.success = False
+        if not result.error:
+            # 첫 실패 단계를 대표 에러 코드로 노출 (CONVERT 는 위에서 이미 설정).
+            _first_stage = next(iter(_real_errors))
+            result.error = f"{_first_stage.upper()}_FAILED"
 
     _log.info(
         "파이프라인 종료 — success=%s error=%r stages_failed=%s mp3=%s txt=%s summary=%s",
