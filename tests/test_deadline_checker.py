@@ -105,7 +105,9 @@ def test_check_and_notify_sends_one_and_records_suppressed_keys():
     """check_and_notify_deadlines: 동시 통과 시 알림 1건 발송 + 24h·12h 키 모두
     notified 에 기록(suppress) 되는지 검증.
     """
-    now = datetime(2026, 5, 20, 12, 0, tzinfo=KST)
+    # check_and_notify_deadlines 는 now 를 주입받지 못하고 내부에서 현재 시각을
+    # 쓰므로, deadline 을 실제 현재 시각 기준 상대값으로 만든다 (날짜 의존 flaky 방지).
+    now = datetime.now(KST).replace(minute=0, second=0, microsecond=0)
     deadline = now + timedelta(hours=10)
     course = _course()
     lec = _assignment(end_date=_date_str(deadline))
