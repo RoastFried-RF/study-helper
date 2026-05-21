@@ -7,6 +7,7 @@ Playwright headless 브라우저 세션을 하나 유지하면서 대시보드 �
 
 import asyncio
 import re
+import time
 from collections.abc import Callable
 
 from playwright.async_api import Frame, Page, async_playwright
@@ -351,10 +352,54 @@ class CourseScraper:
             if btn_text and "펼치기" in btn_text:
                 # LMS breadcrumb가 iframe 위를 덮어 click이 차단되므로 JS로 직접 클릭
                 await expand_btn.evaluate("el => el.click()")
-                await asyncio.sleep(0.5)
+
+        # 강의 항목 + 완료/출석 상태 배지가 모두 렌더 완료될 때까지 대기.
+        # 고정 sleep(0.5) 은 강의 수가 많은 과목(수십 개)에서 상태 배지의 비동기
+        # 렌더를 못 따라가 completion 을 incomplete 로 오판정했다(미시청 오표시).
+        await self._wait_for_lecture_render(iframe)
 
         weeks = await self._parse_weeks(iframe)
         return CourseDetail(course=course, course_name=course_name, professors=professors, weeks=weeks)
+
+    async def _wait_for_lecture_render(
+        self,
+        iframe: Frame,
+        *,
+        timeout: float = 15.0,
+        stable_checks: int = 3,
+        interval: float = 0.4,
+    ) -> None:
+        """강의 항목 + 완료/출석 상태 배지가 모두 렌더 완료될 때까지 대기한다.
+
+        LMS SPA 는 강의 항목(`.xnmb-module_item-outer-wrapper`)을 먼저 그리고
+        상태 배지(`module_item-completed` / `attendance_status`)를 비동기로
+        후속 렌더한다. 항목 수만 기준으로 대기하면 배지 미렌더 상태에서 파싱해
+        `completion` 을 `incomplete` 로 오판정한다(강의 수가 많은 과목에서 빈발).
+        항목 수 + 배지 수가 `stable_checks` 회 연속 동일할 때 안정으로 판단한다.
+        """
+        deadline = time.monotonic() + timeout
+        prev: tuple[int, int] | None = None
+        stable = 0
+        while time.monotonic() < deadline:
+            items = len(await iframe.query_selector_all(".xnmb-module_item-outer-wrapper"))
+            markers = len(
+                await iframe.query_selector_all(
+                    "[class*='module_item-completed'], [class*='attendance_status']"
+                )
+            )
+            snapshot = (items, markers)
+            if snapshot == prev and items > 0:
+                stable += 1
+                if stable >= stable_checks:
+                    return
+            else:
+                stable = 0
+            prev = snapshot
+            await asyncio.sleep(interval)
+        self._log(
+            f"강의 렌더 안정화 timeout ({timeout}s) — 마지막 상태 {prev} 로 진행",
+            "warning",
+        )
 
     async def _parse_weeks(self, iframe: Frame) -> list[Week]:
         module_list = await iframe.query_selector(".xnmb-module-list")
