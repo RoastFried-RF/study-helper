@@ -59,6 +59,8 @@ def _is_stub_media_uri(media_uri: str) -> bool:
     progressive URI 도 정상이므로 _is_valid_mp4 의 '.mp4 필수' 조건 없이
     exclude_patterns 만 검사한다 (M1)."""
     return any(p in media_uri for p in _STUB_EXCLUDE_PATTERNS)
+
+
 _CONTENT_PHP_POLL_MAX = 20  # content.php 파싱 대기 폴링 횟수 (x0.5s = 10s)
 _VIDEO_POLL_MAX = 120  # video DOM 폴링 횟수 (x0.5s = 60s)
 _DIALOG_SETTLE_SEC = 1  # 다이얼로그 렌더링 대기 (초)

@@ -54,16 +54,18 @@ def is_browser_dead_exception(exc: BaseException) -> bool:
     return any(marker in str(exc).lower() for marker in _DEAD_BROWSER_MARKERS)
 
 
-def _parse_duration(raw: object) -> float:
+def _parse_duration(raw: object) -> float | None:
     """LearningX API duration 값을 안전하게 float 로 변환한다 (M2b).
 
-    비숫자/None/빈값이면 0.0 을 반환해 호출부가 fallback_duration 으로 위임하도록 한다.
-    과거엔 float() 가 비숫자 문자열에 ValueError 를 던져 Plan B 가 통째로 죽었다.
+    파싱 실패(비숫자 문자열 등)면 None 을 반환한다 — 호출부가 fallback_duration 위임
+    + 진단 로그의 신호로 쓴다. 합법적인 0("0"/0/None/"")은 0.0 으로 정상 파싱되어
+    '파싱 실패' 로그를 유발하지 않는다. 과거엔 float() 가 비숫자 문자열에 ValueError 를
+    던져 Plan B 가 통째로 죽었다.
     """
     try:
         return float(raw or 0)
     except (ValueError, TypeError):
-        return 0.0
+        return None
 
 
 def _is_play_complete(duration: float, current: float) -> bool:
@@ -458,8 +460,10 @@ async def _report_completion(
             log("  [완료 보고] 4xx 결정적 에러 — 재시도 중단")
             break
         # M2: 드라이버/브라우저 death 면 재시도해도 같은 "Connection closed" 라
-        # 2초 x 남은횟수만 낭비한다. 즉시 중단 — 출석 미인정 신호는 상위 폴링 루프의
-        # 완료 판정(state.ended)이 별도로 감지한다.
+        # 2초 x 남은횟수만 낭비한다. 즉시 중단한다. 이 경우 출석 보고는 포기된다 —
+        # 호출부(_play_via_progress_api)가 _report_completion 호출 전 이미 state.ended
+        # 를 set 하므로 보고 실패를 되돌리지 못하며, 드라이버가 죽은 상태에선 HTTP 보고
+        # 자체가 불가능하다(복구 불가). 다음 사이클의 정상 재시도에 위임한다.
         if driver_dead:
             log("  [완료 보고] 드라이버 종료 감지 — 재시도 중단 (출석 미인정 가능)")
             break
@@ -595,10 +599,12 @@ async def _play_via_learningx_api(
         return state
 
     # M2b: 비숫자 duration 이 Plan B 를 죽이지 않도록 안전 파싱 (모듈 SSOT _parse_duration).
+    # 파싱 실패(None)일 때만 진단 로그 — 합법적 0 은 로그 없이 fallback 위임.
     _raw_duration = data.get("item_content_data", {}).get("duration", 0)
-    duration = _parse_duration(_raw_duration)
-    if duration == 0.0 and _raw_duration:
+    _parsed_duration = _parse_duration(_raw_duration)
+    if _parsed_duration is None:
         log(f"  [LX] duration 파싱 실패 ({_raw_duration!r}) — fallback_duration 사용")
+    duration = _parsed_duration if _parsed_duration is not None else 0.0
     log(f"  [LX] viewer_url={viewer_url}")
     log(f"  [LX] duration={duration:.1f}s — Plan B로 전환")
 

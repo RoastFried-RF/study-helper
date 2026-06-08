@@ -50,15 +50,22 @@ class TestParseDuration:
     def test_int(self):
         assert _parse_duration(60) == 60.0
 
-    def test_non_numeric_falls_back_to_zero(self):
-        """비숫자 문자열은 ValueError 로 죽지 않고 0.0 (fallback 위임)."""
-        assert _parse_duration("N/A") == 0.0
+    def test_non_numeric_returns_none(self):
+        """비숫자 문자열은 ValueError 로 죽지 않고 None(파싱 실패 신호)을 반환한다."""
+        assert _parse_duration("N/A") is None
+        assert _parse_duration("abc") is None
 
-    def test_none_falls_back_to_zero(self):
+    def test_none_input_parses_zero(self):
+        """None 입력은 0 으로 정상 파싱 (파싱 실패 아님)."""
         assert _parse_duration(None) == 0.0
 
-    def test_empty_string_falls_back_to_zero(self):
+    def test_empty_string_parses_zero(self):
         assert _parse_duration("") == 0.0
+
+    def test_legit_zero_string_parses_not_none(self):
+        """EXTRACT/SF-004 회귀: 합법적 0 문자열은 0.0 으로 파싱돼 '파싱 실패'(None)가 아니다."""
+        assert _parse_duration("0") == 0.0
+        assert _parse_duration("0.0") == 0.0
 
 
 # ── TEST-005: Plan A 재생 완료 판정 (M2b) ─────────────────────────
