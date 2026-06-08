@@ -54,6 +54,28 @@ def is_browser_dead_exception(exc: BaseException) -> bool:
     return any(marker in str(exc).lower() for marker in _DEAD_BROWSER_MARKERS)
 
 
+def _parse_duration(raw: object) -> float:
+    """LearningX API duration 값을 안전하게 float 로 변환한다 (M2b).
+
+    비숫자/None/빈값이면 0.0 을 반환해 호출부가 fallback_duration 으로 위임하도록 한다.
+    과거엔 float() 가 비숫자 문자열에 ValueError 를 던져 Plan B 가 통째로 죽었다.
+    """
+    try:
+        return float(raw or 0)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _is_play_complete(duration: float, current: float) -> bool:
+    """Plan A(DOM 폴링) 재생 완료 판정 (M2b).
+
+    duration 이 임계(_END_THRESHOLD)보다 길 때만 'near-end' 휴리스틱을 적용한다.
+    초단 영상(duration <= _END_THRESHOLD)은 target 이 음수/0 이 되어 current=0 에도
+    완료로 오판하므로 제외하고, 실제 ended 신호에 맡긴다.
+    """
+    return duration > _END_THRESHOLD and current >= duration - _END_THRESHOLD
+
+
 # 호스트 허용 목록 — LMS/플레이어 서버 외 URL 차단 (SSRF 방지)
 _ALLOWED_PLAYER_HOSTS = {"canvas.ssu.ac.kr", "commons.ssu.ac.kr"}
 
@@ -409,26 +431,28 @@ async def _report_completion(
                 if is_browser_dead_exception(e):
                     driver_dead = True
 
-        # 폴백: page.request.get
-        report_url_fb, _ = _build_url()
-        try:
-            response = await page.request.get(
-                report_url_fb,
-                headers={"Referer": "https://commons.ssu.ac.kr/"},
-            )
+        # 폴백: page.request.get — 단 이미 driver-death 가 확정된 경우 같은
+        # "Connection closed" 만 반복되므로 호출/로그 노이즈를 줄이려 건너뛴다.
+        if not driver_dead:
+            report_url_fb, _ = _build_url()
             try:
-                body = await response.text()
-                log(f"  [완료 보고] request.get 응답: {response.status}  body={body[:200]!r}")
-                if '"result":true' in body:
-                    return
-                if 400 <= response.status < 500:
-                    deterministic_fail = True
-            finally:
-                await response.dispose()
-        except Exception as e:
-            log(f"  [완료 보고] request.get 실패: {e}")
-            if is_browser_dead_exception(e):
-                driver_dead = True
+                response = await page.request.get(
+                    report_url_fb,
+                    headers={"Referer": "https://commons.ssu.ac.kr/"},
+                )
+                try:
+                    body = await response.text()
+                    log(f"  [완료 보고] request.get 응답: {response.status}  body={body[:200]!r}")
+                    if '"result":true' in body:
+                        return
+                    if 400 <= response.status < 500:
+                        deterministic_fail = True
+                finally:
+                    await response.dispose()
+            except Exception as e:
+                log(f"  [완료 보고] request.get 실패: {e}")
+                if is_browser_dead_exception(e):
+                    driver_dead = True
 
         if deterministic_fail:
             log("  [완료 보고] 4xx 결정적 에러 — 재시도 중단")
@@ -570,14 +594,11 @@ async def _play_via_learningx_api(
         state.error = "viewer_url 호스트 검증 실패"
         return state
 
-    # M2b: duration 이 비숫자 문자열이면 float() 가 ValueError 로 Plan B 를 통째로
-    # 죽인다. 안전 파싱 후 실패 시 0 으로 두어 fallback_duration 에 위임한다.
+    # M2b: 비숫자 duration 이 Plan B 를 죽이지 않도록 안전 파싱 (모듈 SSOT _parse_duration).
     _raw_duration = data.get("item_content_data", {}).get("duration", 0)
-    try:
-        duration = float(_raw_duration or 0)
-    except (ValueError, TypeError):
+    duration = _parse_duration(_raw_duration)
+    if duration == 0.0 and _raw_duration:
         log(f"  [LX] duration 파싱 실패 ({_raw_duration!r}) — fallback_duration 사용")
-        duration = 0.0
     log(f"  [LX] viewer_url={viewer_url}")
     log(f"  [LX] duration={duration:.1f}s — Plan B로 전환")
 
@@ -1324,11 +1345,8 @@ async def _play_lecture_inner(
             log("[7] 영상 ended=True — 완료")
             break
 
-        # duration - threshold 이상 재생됐으면 완료로 간주.
-        # 단 duration <= _END_THRESHOLD(초단 영상)에서는 target 이 음수/0 이 되어
-        # current=0 에도 즉시 완료로 오판하므로, 임계 휴리스틱은 duration 이
-        # threshold 보다 긴 경우에만 적용한다. 초단 영상은 위의 실제 ended=True 로 완료.
-        if state.duration > _END_THRESHOLD and state.current >= state.duration - _END_THRESHOLD:
+        # duration - threshold 이상 재생됐으면 완료로 간주 (_is_play_complete — 모듈 SSOT).
+        if _is_play_complete(state.duration, state.current):
             state.ended = True
             if on_progress:
                 on_progress(state)
