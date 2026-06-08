@@ -64,6 +64,27 @@ class TestStubUrlFiltering:
     def test_non_mp4_rejected(self):
         assert not self._is_valid_mp4("https://x/file.m3u8", self._EXCLUDE_PATTERNS)
 
+    # ── M1 regression: content.php XML 경로의 stub 필터 ──────────────
+    # content.php media_uri 는 비-mp4(progressive 등)도 정상이므로 _is_valid_mp4 의
+    # ".mp4 필수" 조건이 아니라 exclude_patterns 만 검사한다. 아래는 그 분기 로직.
+    @staticmethod
+    def _content_php_media_allowed(media_uri: str, patterns: tuple[str, ...]) -> bool:
+        return not any(p in media_uri for p in patterns)
+
+    def test_content_php_intro_stub_rejected(self):
+        """M1: content.php media_uri 가 intro.mp4 stub 이면 제외돼야 한다."""
+        media_uri = "https://commons.ssu.ac.kr/settings/viewer/uniplayer/intro.mp4"
+        assert not self._content_php_media_allowed(media_uri, self._EXCLUDE_PATTERNS)
+
+    def test_content_php_progressive_non_mp4_allowed(self):
+        """M1: content.php 의 비-mp4 progressive URI 는 (mp4 아니어도) 허용돼야 한다."""
+        media_uri = "https://ssu-toast.commonscdn.com/contents/main_media/stream.m4s"
+        assert self._content_php_media_allowed(media_uri, self._EXCLUDE_PATTERNS)
+
+    def test_content_php_real_mp4_allowed(self):
+        media_uri = "https://ssu-toast.commonscdn.com/x/media_files/main_(uuid).mp4"
+        assert self._content_php_media_allowed(media_uri, self._EXCLUDE_PATTERNS)
+
 
 # ── 재시도 정책 (L1 두 번째 fix) ──────────────────────────────
 

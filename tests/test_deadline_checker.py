@@ -141,8 +141,10 @@ def test_check_and_notify_sends_one_and_records_suppressed_keys():
 
     # 알림은 1건만 발송 (12h).
     assert mock_notify.call_count == 1, "동시 통과해도 텔레그램 발송은 1건"
-    # 발송 + suppress 키 모두 기록 → sent 카운트 2 (dedup_key + suppress_keys).
-    assert sent == 2
+    # L4: 반환값은 docstring 계약대로 "전송된 알림 수"(실제 텔레그램 발송 건수) = 1.
+    # suppress 키는 notified 에 기록될 뿐 발송 건수에 포함되지 않는다(과거 len(sent_keys)
+    # 가 dedup+suppress 를 더해 2 를 반환하던 버그를 수정).
+    assert sent == 1
     key_24 = _make_dedup_key(course, lec, 24)
     key_12 = _make_dedup_key(course, lec, 12)
     assert written["notified"] == {key_12, key_24}, (

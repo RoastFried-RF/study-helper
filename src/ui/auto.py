@@ -31,6 +31,7 @@ from src.downloader.result import (
     is_no_retry_reason,
 )
 from src.logger import get_logger
+from src.player.background_player import is_browser_dead_exception
 from src.service.progress_store import ProgressStore
 from src.service.scheduler import (
     DEFAULT_SCHEDULE_HOURS,
@@ -79,22 +80,9 @@ class DownloadStepResult(NamedTuple):
 _MAX_PLAY_RETRIES = _RetryPolicy.PLAY
 _BROWSER_RESTART_INTERVAL = _RetryPolicy.BROWSER_RESTART_INTERVAL
 
-# B3: Playwright driver/browser 죽음을 감지하는 예외 메시지 패턴.
-# 이 중 하나가 예외 메시지에 포함되면 scraper를 close() 후 start()로 재시작한다.
-_DEAD_BROWSER_MARKERS = (
-    "connection closed",                     # driver 연결 종료
-    "target page, context or browser has been closed",
-    "browser has been closed",
-    "browsercontext has been closed",
-    "browsercontext.new_page",               # 컨텍스트 자체가 죽었을 때 흔한 메시지
-    "websocket.",                            # playwright 내부 ws 예외
-)
-
-
-def _is_browser_dead_exception(exc: BaseException) -> bool:
-    """예외 메시지를 보고 Playwright 브라우저/드라이버 death 여부를 추정한다."""
-    msg = str(exc).lower()
-    return any(marker in msg for marker in _DEAD_BROWSER_MARKERS)
+# B3/M2: Playwright driver/browser death 감지는 background_player 에 SSOT 로 통합
+# (완료보고 단축과 동일 판정 공유). 기존 호출부 호환을 위해 별칭만 유지한다.
+_is_browser_dead_exception = is_browser_dead_exception
 
 
 async def _restart_browser_with_retry(scraper: "CourseScraper", max_retries: int = 3) -> bool:
@@ -303,6 +291,10 @@ async def run_auto_mode(
         lambda t: _log.debug("입력 리스너 종료: %s", t.exception()) if not t.cancelled() and t.exception() else None
     )
     cycle_count = 0
+    # M4: 사이클 도중 예기치 못한 예외(KeyboardInterrupt/CancelledError 외)로
+    # 빠져나가도 마지막 배치 delta 를 잃지 않도록 현재 사이클 store 를 추적한다.
+    # function-level finally 에서 강제 flush (이미 저장됐으면 _dirty==0 → no-op).
+    current_store: ProgressStore | None = None
 
     try:
         while not stop_event.is_set():
@@ -431,7 +423,7 @@ async def run_auto_mode(
             #   1. 재생 미완료 (needs_watch) → full pending (재생+다운로드)
             #   2. 재생은 완료됐지만 store.needs_download_retry → download-only pending
             #   3. 파일시스템이 이미 존재하면 store에 확정 기록 후 스킵
-            store = _load_store()
+            store = current_store = _load_store()
             rule = Config.DOWNLOAD_RULE or "both"
 
             all_urls: set[str] = set()
@@ -606,6 +598,13 @@ async def run_auto_mode(
     except (KeyboardInterrupt, asyncio.CancelledError):
         console.print("\n  [dim]자동 모드 중단...[/dim]")
     finally:
+        # M4: 사이클 도중 빠져나가도 마지막 배치 delta 를 보존 (배치 _maybe_save_store
+        # 와 cycle-end _save_store 사이의 크래시 윈도우 방어). 이미 flush 됐으면 no-op.
+        if current_store is not None:
+            try:
+                _save_store(current_store)
+            except Exception as _flush_e:
+                _log.warning("종료 시 진행 저장 실패: %s", _flush_e)
         listener_task.cancel()
         try:
             await listener_task

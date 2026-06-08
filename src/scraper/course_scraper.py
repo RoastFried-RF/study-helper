@@ -343,6 +343,10 @@ class CourseScraper:
         await asyncio.sleep(0.5)
 
         root = await iframe.query_selector("#root")
+        if root is None:
+            # L3: wait_for_selector 통과 직후에도 SPA 재렌더로 #root 가 분리될 수 있다.
+            # None 이면 get_attribute 에서 AttributeError 로 죽으므로 명시적 신호로 전환.
+            raise RuntimeError("#root 요소를 찾을 수 없습니다 (SPA 렌더 경합).")
         course_name = await root.get_attribute("data-course_name") or course.long_name
         professors = await root.get_attribute("data-professors") or ""
 
@@ -351,7 +355,12 @@ class CourseScraper:
             btn_text = await expand_btn.text_content()
             if btn_text and "펼치기" in btn_text:
                 # LMS breadcrumb가 iframe 위를 덮어 click이 차단되므로 JS로 직접 클릭
-                await expand_btn.evaluate("el => el.click()")
+                try:
+                    await expand_btn.evaluate("el => el.click()")
+                except Exception as e:
+                    # L3: 클릭 실패 시 일부 주차가 접힌 채 남아 강의가 누락될 수 있다.
+                    # 치명적이진 않으나 silent 누락을 막기 위해 로깅한다.
+                    self._file_log.warning("주차 펼치기 클릭 실패 (일부 강의 누락 가능): %s", e)
 
         # 강의 항목 + 완료/출석 상태 배지가 모두 렌더 완료될 때까지 대기.
         # 고정 sleep(0.5) 은 강의 수가 많은 과목(수십 개)에서 상태 배지의 비동기

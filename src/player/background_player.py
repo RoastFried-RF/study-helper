@@ -36,6 +36,24 @@ _DIALOG_SEL = ".confirm-msg-box"
 _PLAY_BTN = ".vc-front-screen-play-btn"
 _VIDEO_SEL = "video.vc-vplay-video1"
 
+# B3/M2: Playwright driver/browser death 를 예외 메시지로 감지하는 패턴 (SSOT).
+# ui/auto.py 의 브라우저 재시작 로직과 background_player 의 완료보고 단축이 같은
+# 판정을 공유하도록 이 저수준 모듈에 단일 정의하고, auto.py 는 이를 import 한다.
+_DEAD_BROWSER_MARKERS = (
+    "connection closed",                     # driver 연결 종료
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "browsercontext has been closed",
+    "browsercontext.new_page",               # 컨텍스트 자체가 죽었을 때 흔한 메시지
+    "websocket.",                            # playwright 내부 ws 예외
+)
+
+
+def is_browser_dead_exception(exc: BaseException) -> bool:
+    """예외 메시지를 보고 Playwright 브라우저/드라이버 death 여부를 추정한다."""
+    return any(marker in str(exc).lower() for marker in _DEAD_BROWSER_MARKERS)
+
+
 # 호스트 허용 목록 — LMS/플레이어 서버 외 URL 차단 (SSRF 방지)
 _ALLOWED_PLAYER_HOSTS = {"canvas.ssu.ac.kr", "commons.ssu.ac.kr"}
 
@@ -348,6 +366,7 @@ async def _report_completion(
 
         log(f"  [완료 보고] 100% 진도 직접 전송 (duration={duration:.1f}s)")
         deterministic_fail = False
+        driver_dead = False
 
         # Plan A: page.evaluate fetch (canvas.ssu.ac.kr 동일 오리진 — sl=1 세션 중에도 동작)
         if use_page_eval:
@@ -373,6 +392,8 @@ async def _report_completion(
                 log(f"  [완료 보고] page ctx fetch 실패 ({status}) — page.request.get으로 폴백")
             except Exception as e:
                 log(f"  [완료 보고] page ctx fetch 오류: {e}")
+                if is_browser_dead_exception(e):
+                    driver_dead = True
 
         # Plan B: commons_frame JSONP (sl=0 세션 — ErrAlreadyInView 우회)
         elif commons_frame:
@@ -385,6 +406,8 @@ async def _report_completion(
                 log("  [완료 보고] JSONP 결과 false — page.request.get으로 폴백")
             except Exception as e:
                 log(f"  [완료 보고] JSONP 실패 ({e}) — page.request.get으로 폴백")
+                if is_browser_dead_exception(e):
+                    driver_dead = True
 
         # 폴백: page.request.get
         report_url_fb, _ = _build_url()
@@ -404,9 +427,17 @@ async def _report_completion(
                 await response.dispose()
         except Exception as e:
             log(f"  [완료 보고] request.get 실패: {e}")
+            if is_browser_dead_exception(e):
+                driver_dead = True
 
         if deterministic_fail:
             log("  [완료 보고] 4xx 결정적 에러 — 재시도 중단")
+            break
+        # M2: 드라이버/브라우저 death 면 재시도해도 같은 "Connection closed" 라
+        # 2초 x 남은횟수만 낭비한다. 즉시 중단 — 출석 미인정 신호는 상위 폴링 루프의
+        # 완료 판정(state.ended)이 별도로 감지한다.
+        if driver_dead:
+            log("  [완료 보고] 드라이버 종료 감지 — 재시도 중단 (출석 미인정 가능)")
             break
 
     log("  [완료 보고] 시도 종료 — 출석이 인정되지 않았을 수 있습니다")
@@ -539,7 +570,14 @@ async def _play_via_learningx_api(
         state.error = "viewer_url 호스트 검증 실패"
         return state
 
-    duration = float(data.get("item_content_data", {}).get("duration", 0) or 0)
+    # M2b: duration 이 비숫자 문자열이면 float() 가 ValueError 로 Plan B 를 통째로
+    # 죽인다. 안전 파싱 후 실패 시 0 으로 두어 fallback_duration 에 위임한다.
+    _raw_duration = data.get("item_content_data", {}).get("duration", 0)
+    try:
+        duration = float(_raw_duration or 0)
+    except (ValueError, TypeError):
+        log(f"  [LX] duration 파싱 실패 ({_raw_duration!r}) — fallback_duration 사용")
+        duration = 0.0
     log(f"  [LX] viewer_url={viewer_url}")
     log(f"  [LX] duration={duration:.1f}s — Plan B로 전환")
 
@@ -1286,8 +1324,11 @@ async def _play_lecture_inner(
             log("[7] 영상 ended=True — 완료")
             break
 
-        # duration - threshold 이상 재생됐으면 완료로 간주
-        if state.duration > 0 and state.current >= state.duration - _END_THRESHOLD:
+        # duration - threshold 이상 재생됐으면 완료로 간주.
+        # 단 duration <= _END_THRESHOLD(초단 영상)에서는 target 이 음수/0 이 되어
+        # current=0 에도 즉시 완료로 오판하므로, 임계 휴리스틱은 duration 이
+        # threshold 보다 긴 경우에만 적용한다. 초단 영상은 위의 실제 ended=True 로 완료.
+        if state.duration > _END_THRESHOLD and state.current >= state.duration - _END_THRESHOLD:
             state.ended = True
             if on_progress:
                 on_progress(state)

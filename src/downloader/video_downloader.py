@@ -258,6 +258,14 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
                                 media_uri = url_template
                     del root  # XML 트리 즉시 해제
 
+                    # M1: content.php 경로도 네트워크 경로(_on_request/_on_response 의
+                    # _is_valid_mp4)와 동일하게 stub 패턴을 제외한다. 단 content.php
+                    # media_uri 는 비-mp4(progressive 등)도 정상이므로 _is_valid_mp4
+                    # 의 ".mp4 필수" 조건은 쓰지 않고 exclude_patterns 만 검사한다.
+                    if media_uri and any(p in media_uri for p in exclude_patterns):
+                        _dl_log.info("content.php media_uri stub 패턴 제외 — url=%s", media_uri)
+                        media_uri = None
+
                     if media_uri and captured["url"] is None:
                         captured["url"] = media_uri
                     elif not media_uri:
@@ -517,6 +525,18 @@ async def download_video_with_browser(
                 attempt=attempt, cookies=cookies, referer=referer,
             )
             return save_path.resolve()
+        except requests.exceptions.HTTPError as e:
+            # R2-11: raise_for_status() 가 던지는 HTTPError 는 _RETRYABLE 에 없어
+            # 과거엔 generic Exception 으로 즉시 break 됐다 — CDN 일시 5xx(503/502)
+            # 가 영구 실패로 전환되던 버그. 5xx(서버 일시 장애)는 재시도, 4xx
+            # (인증·권한 등 결정적)는 즉시 중단으로 분리한다.
+            last_error = e
+            _remove_partial(save_path)
+            _status = e.response.status_code if e.response is not None else 0
+            if _status < 500:
+                break
+            if attempt < _MAX_RETRIES:
+                await asyncio.sleep(2**attempt)
         except _RETRYABLE as e:
             last_error = e
             _remove_partial(save_path)

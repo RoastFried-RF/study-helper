@@ -247,7 +247,10 @@ def check_and_notify_deadlines(
     stale_keys = notified - valid_keys
 
     # 발송은 file_lock **밖**에서 — telegram 네트워크 I/O 동안 파일락을 잡지 않는다.
+    # L4: sent_keys 는 dedup + suppress 키를 모두 모으므로 그 길이는 "실제 발송 건수"
+    # 와 다르다. 반환값(전송된 알림 수)은 별도 카운터로 정확히 센다.
     sent_keys: set[str] = set()
+    sent_count = 0
     for item in items:
         ok = notify_deadline_warning(
             bot_token=token,
@@ -260,6 +263,7 @@ def check_and_notify_deadlines(
             remaining_hours=item.remaining_hours,
         )
         if ok:
+            sent_count += 1
             sent_keys.add(item.dedup_key)
             # R2-09: 함께 통과했으나 발송하지 않은 threshold 키도 notified 에
             # 기록해 다음 체크에서 잔여 알림이 재발송되지 않도록 suppress 한다.
@@ -281,4 +285,4 @@ def check_and_notify_deadlines(
         except Exception as e:
             _log.warning("deadline_notified.json 저장 실패: %s", e)
 
-    return len(sent_keys)
+    return sent_count
