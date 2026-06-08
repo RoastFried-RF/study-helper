@@ -36,6 +36,48 @@ _DIALOG_SEL = ".confirm-msg-box"
 _PLAY_BTN = ".vc-front-screen-play-btn"
 _VIDEO_SEL = "video.vc-vplay-video1"
 
+# B3/M2: Playwright driver/browser death 를 예외 메시지로 감지하는 패턴 (SSOT).
+# ui/auto.py 의 브라우저 재시작 로직과 background_player 의 완료보고 단축이 같은
+# 판정을 공유하도록 이 저수준 모듈에 단일 정의하고, auto.py 는 이를 import 한다.
+_DEAD_BROWSER_MARKERS = (
+    "connection closed",                     # driver 연결 종료
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "browsercontext has been closed",
+    "browsercontext.new_page",               # 컨텍스트 자체가 죽었을 때 흔한 메시지
+    "websocket.",                            # playwright 내부 ws 예외
+)
+
+
+def is_browser_dead_exception(exc: BaseException) -> bool:
+    """예외 메시지를 보고 Playwright 브라우저/드라이버 death 여부를 추정한다."""
+    return any(marker in str(exc).lower() for marker in _DEAD_BROWSER_MARKERS)
+
+
+def _parse_duration(raw: object) -> float | None:
+    """LearningX API duration 값을 안전하게 float 로 변환한다 (M2b).
+
+    파싱 실패(비숫자 문자열 등)면 None 을 반환한다 — 호출부가 fallback_duration 위임
+    + 진단 로그의 신호로 쓴다. 합법적인 0("0"/0/None/"")은 0.0 으로 정상 파싱되어
+    '파싱 실패' 로그를 유발하지 않는다. 과거엔 float() 가 비숫자 문자열에 ValueError 를
+    던져 Plan B 가 통째로 죽었다.
+    """
+    try:
+        return float(raw or 0)
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_play_complete(duration: float, current: float) -> bool:
+    """Plan A(DOM 폴링) 재생 완료 판정 (M2b).
+
+    duration 이 임계(_END_THRESHOLD)보다 길 때만 'near-end' 휴리스틱을 적용한다.
+    초단 영상(duration <= _END_THRESHOLD)은 target 이 음수/0 이 되어 current=0 에도
+    완료로 오판하므로 제외하고, 실제 ended 신호에 맡긴다.
+    """
+    return duration > _END_THRESHOLD and current >= duration - _END_THRESHOLD
+
+
 # 호스트 허용 목록 — LMS/플레이어 서버 외 URL 차단 (SSRF 방지)
 _ALLOWED_PLAYER_HOSTS = {"canvas.ssu.ac.kr", "commons.ssu.ac.kr"}
 
@@ -348,6 +390,7 @@ async def _report_completion(
 
         log(f"  [완료 보고] 100% 진도 직접 전송 (duration={duration:.1f}s)")
         deterministic_fail = False
+        driver_dead = False
 
         # Plan A: page.evaluate fetch (canvas.ssu.ac.kr 동일 오리진 — sl=1 세션 중에도 동작)
         if use_page_eval:
@@ -373,6 +416,8 @@ async def _report_completion(
                 log(f"  [완료 보고] page ctx fetch 실패 ({status}) — page.request.get으로 폴백")
             except Exception as e:
                 log(f"  [완료 보고] page ctx fetch 오류: {e}")
+                if is_browser_dead_exception(e):
+                    driver_dead = True
 
         # Plan B: commons_frame JSONP (sl=0 세션 — ErrAlreadyInView 우회)
         elif commons_frame:
@@ -385,28 +430,42 @@ async def _report_completion(
                 log("  [완료 보고] JSONP 결과 false — page.request.get으로 폴백")
             except Exception as e:
                 log(f"  [완료 보고] JSONP 실패 ({e}) — page.request.get으로 폴백")
+                if is_browser_dead_exception(e):
+                    driver_dead = True
 
-        # 폴백: page.request.get
-        report_url_fb, _ = _build_url()
-        try:
-            response = await page.request.get(
-                report_url_fb,
-                headers={"Referer": "https://commons.ssu.ac.kr/"},
-            )
+        # 폴백: page.request.get — 단 이미 driver-death 가 확정된 경우 같은
+        # "Connection closed" 만 반복되므로 호출/로그 노이즈를 줄이려 건너뛴다.
+        if not driver_dead:
+            report_url_fb, _ = _build_url()
             try:
-                body = await response.text()
-                log(f"  [완료 보고] request.get 응답: {response.status}  body={body[:200]!r}")
-                if '"result":true' in body:
-                    return
-                if 400 <= response.status < 500:
-                    deterministic_fail = True
-            finally:
-                await response.dispose()
-        except Exception as e:
-            log(f"  [완료 보고] request.get 실패: {e}")
+                response = await page.request.get(
+                    report_url_fb,
+                    headers={"Referer": "https://commons.ssu.ac.kr/"},
+                )
+                try:
+                    body = await response.text()
+                    log(f"  [완료 보고] request.get 응답: {response.status}  body={body[:200]!r}")
+                    if '"result":true' in body:
+                        return
+                    if 400 <= response.status < 500:
+                        deterministic_fail = True
+                finally:
+                    await response.dispose()
+            except Exception as e:
+                log(f"  [완료 보고] request.get 실패: {e}")
+                if is_browser_dead_exception(e):
+                    driver_dead = True
 
         if deterministic_fail:
             log("  [완료 보고] 4xx 결정적 에러 — 재시도 중단")
+            break
+        # M2: 드라이버/브라우저 death 면 재시도해도 같은 "Connection closed" 라
+        # 2초 x 남은횟수만 낭비한다. 즉시 중단한다. 이 경우 출석 보고는 포기된다 —
+        # 호출부(_play_via_progress_api)가 _report_completion 호출 전 이미 state.ended
+        # 를 set 하므로 보고 실패를 되돌리지 못하며, 드라이버가 죽은 상태에선 HTTP 보고
+        # 자체가 불가능하다(복구 불가). 다음 사이클의 정상 재시도에 위임한다.
+        if driver_dead:
+            log("  [완료 보고] 드라이버 종료 감지 — 재시도 중단 (출석 미인정 가능)")
             break
 
     log("  [완료 보고] 시도 종료 — 출석이 인정되지 않았을 수 있습니다")
@@ -539,7 +598,13 @@ async def _play_via_learningx_api(
         state.error = "viewer_url 호스트 검증 실패"
         return state
 
-    duration = float(data.get("item_content_data", {}).get("duration", 0) or 0)
+    # M2b: 비숫자 duration 이 Plan B 를 죽이지 않도록 안전 파싱 (모듈 SSOT _parse_duration).
+    # 파싱 실패(None)일 때만 진단 로그 — 합법적 0 은 로그 없이 fallback 위임.
+    _raw_duration = data.get("item_content_data", {}).get("duration", 0)
+    _parsed_duration = _parse_duration(_raw_duration)
+    if _parsed_duration is None:
+        log(f"  [LX] duration 파싱 실패 ({_raw_duration!r}) — fallback_duration 사용")
+    duration = _parsed_duration if _parsed_duration is not None else 0.0
     log(f"  [LX] viewer_url={viewer_url}")
     log(f"  [LX] duration={duration:.1f}s — Plan B로 전환")
 
@@ -1286,8 +1351,8 @@ async def _play_lecture_inner(
             log("[7] 영상 ended=True — 완료")
             break
 
-        # duration - threshold 이상 재생됐으면 완료로 간주
-        if state.duration > 0 and state.current >= state.duration - _END_THRESHOLD:
+        # duration - threshold 이상 재생됐으면 완료로 간주 (_is_play_complete — 모듈 SSOT).
+        if _is_play_complete(state.duration, state.current):
             state.ended = True
             if on_progress:
                 on_progress(state)

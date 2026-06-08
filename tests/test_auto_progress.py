@@ -3,11 +3,43 @@
 import json
 from pathlib import Path
 
-from src.service.progress_store import ProgressEntry, ProgressStore
+from src.service.progress_store import ProgressEntry, ProgressStore, _resolve_save_interval
 
 
 def _new_store(tmp_path: Path) -> ProgressStore:
     return ProgressStore(path=tmp_path / "auto_progress.json")
+
+
+# ── L1 regression: PROGRESS_SAVE_INTERVAL 환경변수 안전 파싱 ──────────────
+
+def test_save_interval_default(monkeypatch):
+    """미설정 시 기본값 5."""
+    monkeypatch.delenv("PROGRESS_SAVE_INTERVAL", raising=False)
+    assert _resolve_save_interval() == 5
+
+
+def test_save_interval_valid(monkeypatch):
+    """정상 정수는 그대로 반영."""
+    monkeypatch.setenv("PROGRESS_SAVE_INTERVAL", "3")
+    assert _resolve_save_interval() == 3
+
+
+def test_save_interval_floor_one(monkeypatch):
+    """0 이하는 최소 1 로 보정."""
+    monkeypatch.setenv("PROGRESS_SAVE_INTERVAL", "0")
+    assert _resolve_save_interval() == 1
+
+
+def test_save_interval_non_numeric_falls_back(monkeypatch):
+    """L1: 비숫자 값은 ValueError 로 import 를 깨지 않고 기본값 5 로 폴백한다."""
+    monkeypatch.setenv("PROGRESS_SAVE_INTERVAL", "abc")
+    assert _resolve_save_interval() == 5
+
+
+def test_save_interval_empty_falls_back(monkeypatch):
+    """빈 문자열도 기본값 5."""
+    monkeypatch.setenv("PROGRESS_SAVE_INTERVAL", "")
+    assert _resolve_save_interval() == 5
 
 
 def test_load_missing_file(tmp_path: Path):

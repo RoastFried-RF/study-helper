@@ -19,6 +19,8 @@ from src.downloader.result import (
     is_no_retry_reason,
 )
 from src.downloader.video_downloader import (
+    _is_stub_media_uri,
+    _is_valid_mp4,
     _sanitize_filename,
     _validate_media_url,
     make_filepath,
@@ -29,40 +31,44 @@ from src.downloader.video_downloader import (
 class TestStubUrlFiltering:
     """Plan A DOM 폴링 + Plan B 네트워크 후킹 양쪽에서 stub 패턴이 제외되는지 검증.
 
-    extract_video_url 내부의 클로저 _is_valid_mp4 를 직접 호출할 수 없으므로
-    동일 exclude_patterns 튜플을 재구성해 로직을 재검증한다. 실제 함수 수정
-    시 이 튜플도 함께 업데이트되어야 한다.
+    모듈 SSOT _is_valid_mp4 / _is_stub_media_uri 를 직접 호출한다 (예전엔 클로저라
+    테스트가 로직을 재구현했으나 모듈 레벨로 추출되어 실제 함수를 직접 검증).
     """
-
-    # extract_video_url 내부 클로저와 동일해야 하는 패턴
-    _EXCLUDE_PATTERNS = ("preloader.mp4", "preview.mp4", "thumbnail.mp4", "intro.mp4")
-
-    @staticmethod
-    def _is_valid_mp4(url: str, patterns: tuple[str, ...]) -> bool:
-        return ".mp4" in url and not any(p in url for p in patterns)
 
     def test_intro_mp4_rejected(self):
         """BUG-FIX: intro.mp4 stub URL 이 exclude 되어야 한다 (2026-04-18 관측)."""
-        url = "https://commons.ssu.ac.kr/settings/viewer/uniplayer/intro.mp4"
-        assert not self._is_valid_mp4(url, self._EXCLUDE_PATTERNS)
+        assert not _is_valid_mp4("https://commons.ssu.ac.kr/settings/viewer/uniplayer/intro.mp4")
 
     def test_preloader_mp4_rejected(self):
-        url = "https://commons.ssu.ac.kr/viewer/uniplayer/preloader.mp4"
-        assert not self._is_valid_mp4(url, self._EXCLUDE_PATTERNS)
+        assert not _is_valid_mp4("https://commons.ssu.ac.kr/viewer/uniplayer/preloader.mp4")
 
     def test_preview_mp4_rejected(self):
-        assert not self._is_valid_mp4("https://commons.ssu.ac.kr/x/preview.mp4", self._EXCLUDE_PATTERNS)
+        assert not _is_valid_mp4("https://commons.ssu.ac.kr/x/preview.mp4")
 
     def test_thumbnail_mp4_rejected(self):
-        assert not self._is_valid_mp4("https://x/thumbnail.mp4", self._EXCLUDE_PATTERNS)
+        assert not _is_valid_mp4("https://x/thumbnail.mp4")
 
     def test_real_video_accepted(self):
         """main_* 로 시작하는 실제 CDN URL 은 허용되어야 한다."""
         url = "https://ssu-toast.commonscdn.com/contents31/ssu1000001/abc/contents/media_files/main_(uuid).mp4"
-        assert self._is_valid_mp4(url, self._EXCLUDE_PATTERNS)
+        assert _is_valid_mp4(url)
 
     def test_non_mp4_rejected(self):
-        assert not self._is_valid_mp4("https://x/file.m3u8", self._EXCLUDE_PATTERNS)
+        assert not _is_valid_mp4("https://x/file.m3u8")
+
+    # ── M1 regression: content.php XML 경로의 stub 필터 ──────────────
+    # content.php media_uri 는 비-mp4(progressive 등)도 정상이므로 _is_stub_media_uri
+    # 는 ".mp4 필수" 조건 없이 exclude_patterns 만 검사한다 (실제 함수 직접 호출).
+    def test_content_php_intro_stub_rejected(self):
+        """M1: content.php media_uri 가 intro.mp4 stub 이면 제외(=stub 판정)돼야 한다."""
+        assert _is_stub_media_uri("https://commons.ssu.ac.kr/settings/viewer/uniplayer/intro.mp4")
+
+    def test_content_php_progressive_non_mp4_allowed(self):
+        """M1: content.php 의 비-mp4 progressive URI 는 stub 아님(mp4 아니어도 허용)."""
+        assert not _is_stub_media_uri("https://ssu-toast.commonscdn.com/contents/main_media/stream.m4s")
+
+    def test_content_php_real_mp4_allowed(self):
+        assert not _is_stub_media_uri("https://ssu-toast.commonscdn.com/x/media_files/main_(uuid).mp4")
 
 
 # ── 재시도 정책 (L1 두 번째 fix) ──────────────────────────────
@@ -93,6 +99,81 @@ class TestIsNoRetryReason:
         """분류 실패 시 안전하게 재시도 대상으로 간주."""
         assert is_no_retry_reason(None) is False
         assert is_no_retry_reason("") is False
+
+
+# ── H1 regression: HTTP 5xx 재시도 vs 4xx 즉시중단 ───────────────────
+
+class _FakeContext:
+    async def cookies(self):
+        return []
+
+
+class _FakePage:
+    context = _FakeContext()
+
+
+def _http_error(status: int | None):
+    """status_code 를 가진(또는 response 없는) requests HTTPError 를 만든다."""
+    import requests
+
+    if status is None:
+        return requests.exceptions.HTTPError()
+    resp = requests.Response()
+    resp.status_code = status
+    return requests.exceptions.HTTPError(response=resp)
+
+
+class TestHttpRetryClassification:
+    """H1/QUAL-001: download_video_with_browser 의 HTTPError 분기.
+    5xx·status불명 → 재시도(_MAX_RETRIES 회), 4xx → 즉시 중단(1 회).
+    """
+
+    _URL = "https://commons.ssu.ac.kr/x/main.mp4"
+
+    @staticmethod
+    def _patch(monkeypatch, exc, calls):
+        import asyncio as _aio
+
+        import src.downloader.video_downloader as mod
+
+        def _raise(*a, **k):
+            calls.append(1)
+            raise exc
+
+        async def _no_sleep(*a, **k):
+            return None
+
+        monkeypatch.setattr(mod, "_stream_download", _raise)
+        monkeypatch.setattr(_aio, "sleep", _no_sleep)
+        return mod
+
+    async def test_5xx_retries_all_attempts(self, monkeypatch, tmp_path):
+        import requests
+
+        calls: list[int] = []
+        mod = self._patch(monkeypatch, _http_error(503), calls)
+        with pytest.raises(requests.exceptions.HTTPError):
+            await mod.download_video_with_browser(_FakePage(), self._URL, tmp_path / "v.mp4")
+        assert len(calls) == mod._MAX_RETRIES, "5xx 는 모든 attempt 재시도"
+
+    async def test_4xx_breaks_immediately(self, monkeypatch, tmp_path):
+        import requests
+
+        calls: list[int] = []
+        mod = self._patch(monkeypatch, _http_error(403), calls)
+        with pytest.raises(requests.exceptions.HTTPError):
+            await mod.download_video_with_browser(_FakePage(), self._URL, tmp_path / "v.mp4")
+        assert len(calls) == 1, "4xx 는 즉시 중단"
+
+    async def test_unknown_status_retries(self, monkeypatch, tmp_path):
+        """QUAL-001: response 가 없어 status 불명이면 결정적이라 단정 못하므로 재시도."""
+        import requests
+
+        calls: list[int] = []
+        mod = self._patch(monkeypatch, _http_error(None), calls)
+        with pytest.raises(requests.exceptions.HTTPError):
+            await mod.download_video_with_browser(_FakePage(), self._URL, tmp_path / "v.mp4")
+        assert len(calls) == mod._MAX_RETRIES, "status 불명 → 재시도"
 
 
 # ── SSRF 방어 ────────────────────────────────────────────────

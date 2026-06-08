@@ -50,7 +50,21 @@ _log = get_logger("service.progress_store")
 
 # M6: flush 배치 임계 — _dirty 가 이 값 이상 누적되면 maybe_flush() 가 flush().
 # PROGRESS_SAVE_INTERVAL=1 이면 강의마다 저장(기존 per-item 동작).
-_SAVE_INTERVAL = max(1, int(os.environ.get("PROGRESS_SAVE_INTERVAL", "5") or "5"))
+def _resolve_save_interval() -> int:
+    """PROGRESS_SAVE_INTERVAL 환경변수를 안전하게 정수로 해석한다.
+
+    L1: 비숫자 값(예: "abc")이면 int() 가 ValueError 를 던져 모듈 import 자체가
+    실패, auto 모드 기동이 막힌다. 잘못된 값은 경고 후 기본값 5 로 폴백한다.
+    """
+    raw = os.environ.get("PROGRESS_SAVE_INTERVAL", "5") or "5"
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        _log.warning("PROGRESS_SAVE_INTERVAL 값이 정수가 아님 (%r) — 기본값 5 사용", raw)
+        return 5
+
+
+_SAVE_INTERVAL = _resolve_save_interval()
 
 
 @dataclass

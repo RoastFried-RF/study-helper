@@ -42,6 +42,25 @@ _CHUNK_SIZE = 65536  # 64 KB
 # 2 MB 기준은 "가장 짧은 공지/인트로 강의도 통상 이 크기를 넘는다"는 경험치.
 _MIN_PLAUSIBLE_VIDEO_BYTES = 2 * 1024 * 1024
 _PAGE_GOTO_TIMEOUT = 60_000  # ms — Playwright page.goto timeout
+
+# 플레이어 초기화 단계에서 <video> 태그에 임시 부착되는 stub 파일들 (실제 강의 아님).
+# Plan A(DOM) / Plan B(network) / content.php 모두에서 제외한다 (SSOT — 테스트도 공유).
+# BUG-FIX: intro.mp4 누락으로 stub 이 진짜 URL 로 오인돼 강의가 영구 누락되던 문제.
+_STUB_EXCLUDE_PATTERNS = ("preloader.mp4", "preview.mp4", "thumbnail.mp4", "intro.mp4")
+
+
+def _is_valid_mp4(url: str) -> bool:
+    """.mp4 URL 중 stub 패턴이 아닌 것만 유효 영상으로 판정 (네트워크/DOM 후킹 경로용)."""
+    return ".mp4" in url and not any(p in url for p in _STUB_EXCLUDE_PATTERNS)
+
+
+def _is_stub_media_uri(media_uri: str) -> bool:
+    """content.php media_uri 가 stub 패턴인지 판정한다. content.php 는 비-mp4
+    progressive URI 도 정상이므로 _is_valid_mp4 의 '.mp4 필수' 조건 없이
+    exclude_patterns 만 검사한다 (M1)."""
+    return any(p in media_uri for p in _STUB_EXCLUDE_PATTERNS)
+
+
 _CONTENT_PHP_POLL_MAX = 20  # content.php 파싱 대기 폴링 횟수 (x0.5s = 10s)
 _VIDEO_POLL_MAX = 120  # video DOM 폴링 횟수 (x0.5s = 60s)
 _DIALOG_SETTLE_SEC = 1  # 다이얼로그 렌더링 대기 (초)
@@ -182,15 +201,7 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
     _observed_mp4_count = 0              # 관측된 mp4 URL 총 개수 (stub 포함)
     _first_mp4_url: str | None = None    # 관측된 첫 mp4 URL (진단용, stub 판정에 도움)
 
-    # 플레이어 초기화 단계에서 <video> 태그에 임시로 부착되는 stub 파일들.
-    # 실제 강의가 아니므로 Plan A(DOM) / Plan B(network) 모두에서 제외한다.
-    # BUG-FIX: intro.mp4 누락으로 Plan A가 stub을 진짜 URL로 오인하여
-    # 재시도 불가 처리로 강의가 영구 누락되던 문제 수정.
-    exclude_patterns = ("preloader.mp4", "preview.mp4", "thumbnail.mp4", "intro.mp4")
-
-    def _is_valid_mp4(url: str) -> bool:
-        return ".mp4" in url and not any(p in url for p in exclude_patterns)
-
+    # stub 패턴 필터(_is_valid_mp4 / _is_stub_media_uri)는 모듈 레벨 SSOT 사용.
     def _note_observation(url: str) -> None:
         """관측된 URL 의 진단 메타데이터를 기록 (HLS·mp4 count 등)."""
         nonlocal _observed_hls, _observed_mp4_count, _first_mp4_url
@@ -257,6 +268,12 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
                             elif "[" not in url_template:
                                 media_uri = url_template
                     del root  # XML 트리 즉시 해제
+
+                    # M1: content.php 경로도 네트워크 경로(_is_valid_mp4)와 동일하게
+                    # stub 패턴을 제외한다 (_is_stub_media_uri — 모듈 레벨 SSOT).
+                    if media_uri and _is_stub_media_uri(media_uri):
+                        _dl_log.info("content.php media_uri stub 패턴 제외 — url=%s", media_uri)
+                        media_uri = None
 
                     if media_uri and captured["url"] is None:
                         captured["url"] = media_uri
@@ -517,6 +534,21 @@ async def download_video_with_browser(
                 attempt=attempt, cookies=cookies, referer=referer,
             )
             return save_path.resolve()
+        except requests.exceptions.HTTPError as e:
+            # R2-11: raise_for_status() 가 던지는 HTTPError 는 _RETRYABLE 에 없어
+            # 과거엔 generic Exception 으로 즉시 break 됐다 — CDN 일시 5xx(503/502)
+            # 가 영구 실패로 전환되던 버그. 5xx(서버 일시 장애)는 재시도, 4xx
+            # (인증·권한 등 결정적)는 즉시 중단으로 분리한다.
+            last_error = e
+            _remove_partial(save_path)
+            # status 가 확인되는 경우에만 4xx(결정적)를 즉시 중단한다. response 가
+            # 없어 status 를 알 수 없으면(드문 엣지) 결정적이라 단정할 수 없으므로
+            # 일시 장애로 간주해 재시도한다.
+            _status = e.response.status_code if e.response is not None else None
+            if _status is not None and _status < 500:
+                break
+            if attempt < _MAX_RETRIES:
+                await asyncio.sleep(2**attempt)
         except _RETRYABLE as e:
             last_error = e
             _remove_partial(save_path)
