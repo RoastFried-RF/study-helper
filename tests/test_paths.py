@@ -11,9 +11,11 @@ from pathlib import Path
 
 from src.downloader.paths import (
     _COURSE_ID_MARKER,
+    _MIN_VALID_MEDIA_BYTES,
     _stamp_course_id_marker,
     expected_paths,
     file_present,
+    media_present,
 )
 from src.scraper.models import Course, LectureItem, LectureType
 
@@ -42,7 +44,8 @@ def _make_lec(
     )
 
 
-def _touch(path: Path, size: int = 1) -> None:
+def _touch(path: Path, size: int = _MIN_VALID_MEDIA_BYTES) -> None:
+    """기본 크기는 스텁 하한 이상 — file_present 가 유효 미디어로 인식하게 한다."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"\x00" * size)
 
@@ -274,3 +277,34 @@ def test_file_present_unknown_rule_requires_both(tmp_path: Path):
     _touch(mp4)
 
     assert file_present(tmp_path, course, lec, "garbage-rule") is False
+
+
+# ── 스텁 마스킹 방어 ──────────────────────────────────────────
+
+
+def test_media_present_rejects_stub(tmp_path: Path):
+    """수 KB 스텁(실패 다운로드 잔여)은 미디어로 인식하지 않는다."""
+    stub = tmp_path / "stub.mp4"
+    stub.write_bytes(b"\x00" * 2684)  # 실측 스텁 크기
+    assert media_present(stub) is False
+
+    valid = tmp_path / "valid.mp4"
+    valid.write_bytes(b"\x00" * _MIN_VALID_MEDIA_BYTES)
+    assert media_present(valid) is True
+
+    assert media_present(tmp_path / "nope.mp4") is False  # 미존재
+
+
+def test_file_present_rejects_stub_media(tmp_path: Path):
+    """mp4/mp3 가 스텁이면 file_present 가 False — recover 가 재다운로드하도록."""
+    course = _make_course()
+    lec = _make_lec()
+
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    mp4.parent.mkdir(parents=True, exist_ok=True)
+    mp4.write_bytes(b"\x00" * 2684)  # 스텁
+    mp3.write_bytes(b"\x00" * 4746)  # 스텁
+
+    assert file_present(tmp_path, course, lec, "both") is False
+    assert file_present(tmp_path, course, lec, "video") is False
+    assert file_present(tmp_path, course, lec, "audio") is False
