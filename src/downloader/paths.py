@@ -27,6 +27,12 @@ if TYPE_CHECKING:
 
 _COURSE_ID_MARKER = ".course_id"
 
+# 스텁/truncated 미디어 하한. 실패·중단된 다운로드가 남긴 수 KB 짜리 파일을
+# `.exists()` 만으로 "존재"로 오판하면 recover/reconcile 가 재다운로드를 건너뛰거나
+# (stub masking) store 를 "다운로드 완료"로 잘못 마킹한다. 실제 강의 미디어는 항상
+# MB 단위이므로 보수적 하한으로 스텁을 걸러낸다. (실측 스텁: mp4 2,684B / mp3 4,746B)
+_MIN_VALID_MEDIA_BYTES = 64 * 1024
+
 # M9: course_dir 해결 결과 메모이즈. expected_paths/file_present 가 강의별로
 # _find_course_dir 를 호출해 같은 과목을 반복 재해결(최악: download root 전체
 # iterdir + 마커 read)하던 비용을 1회로 줄인다.
@@ -165,21 +171,47 @@ def expected_paths(
     return mp4, mp3
 
 
+def media_present(path: Path) -> bool:
+    """미디어 파일이 **유효하게** 존재하는지 — 존재 + 스텁 하한 초과.
+
+    `path.exists()` 단독은 실패 다운로드가 남긴 스텁(수 KB)도 True 로 보고하여
+    recover/reconcile 의 누락 판정을 무력화한다(stub masking). 실제 강의 미디어는
+    MB 단위이므로 `_MIN_VALID_MEDIA_BYTES` 미만은 미존재로 취급한다.
+    `file_present` 와 `download_state.list_missing_items` 가 공유하는 단일 판정 소스.
+    """
+    try:
+        if not path.exists():
+            return False
+        return path.stat().st_size >= _MIN_VALID_MEDIA_BYTES
+    except FileNotFoundError:
+        # exists() 와 stat() 사이 삭제 race — 미존재로 취급 (정상).
+        return False
+    except OSError as exc:
+        # 권한/IO 오류를 "미존재"로 silent 처리하면 무의미한 재다운로드를 유발하고
+        # 실제 파일시스템 문제를 가린다 — 미존재로 보수 판정하되 로그로 surface.
+        from src.logger import get_logger
+
+        get_logger("downloader.paths").warning(
+            "media_present: stat 실패 — %s (%s)", exc, path.name
+        )
+        return False
+
+
 def file_present(
     download_dir: str | Path,
     course: Course,
     lec: LectureItem,
     rule: str,
 ) -> bool:
-    """DOWNLOAD_RULE에 따라 기대되는 파일이 모두 존재하는지 확인한다."""
+    """DOWNLOAD_RULE에 따라 기대되는 파일이 모두 (스텁 아닌 유효 크기로) 존재하는지 확인한다."""
     mp4, mp3 = expected_paths(download_dir, course, lec)
     if rule == "video":
-        return mp4.exists()
+        return media_present(mp4)
     if rule == "audio":
-        return mp3.exists()
+        return media_present(mp3)
     if rule == "both":
-        return mp4.exists() and mp3.exists()
+        return media_present(mp4) and media_present(mp3)
     # NF-07: 규칙 미설정(빈 DOWNLOAD_RULE) — `both` 와 동일하게 보수적으로
     # 판정한다. OR 로 두면 mp3 누락을 "완료"로 오판정해 변환/STT 단계를
     # 건너뛰는 위험이 있어, 둘 다 존재할 때만 present 로 본다.
-    return mp4.exists() and mp3.exists()
+    return media_present(mp4) and media_present(mp3)

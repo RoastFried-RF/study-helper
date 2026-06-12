@@ -18,7 +18,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.downloader.paths import expected_paths, file_present
+from src.downloader.paths import expected_paths, file_present, media_present
 from src.downloader.result import REASON_UNSUPPORTED
 
 if TYPE_CHECKING:
@@ -78,8 +78,10 @@ def list_missing_items(
                 continue
 
             mp4, mp3 = expected_paths(download_dir, course, lec)
-            has_video = mp4.exists()
-            has_audio = mp3.exists()
+            # 스텁 마스킹 방어 — 수 KB 짜리 실패 잔여 파일을 "있음"으로 오판하면
+            # completed 강의가 재다운로드에서 누락된다. media_present 가 크기 하한 적용.
+            has_video = media_present(mp4)
+            has_audio = media_present(mp3)
 
             # 파일시스템 누락 판정
             if rule == "video":

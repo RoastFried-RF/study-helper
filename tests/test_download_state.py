@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.downloader.paths import expected_paths
+from src.downloader.paths import _MIN_VALID_MEDIA_BYTES, expected_paths
 from src.scraper.models import Course, CourseDetail, LectureItem, LectureType, Week
 from src.service.download_state import (
     list_missing_items,
@@ -51,7 +51,8 @@ def _make_detail(lecs: list[LectureItem], course: Course | None = None) -> Cours
     return CourseDetail(course=course, course_name=course.long_name, professors="", weeks=[week])
 
 
-def _touch(path: Path, size: int = 100) -> None:
+def _touch(path: Path, size: int = _MIN_VALID_MEDIA_BYTES) -> None:
+    """기본 크기는 스텁 하한 이상 — 유효 미디어로 인식되게 한다."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"\x00" * size)
 
@@ -87,6 +88,27 @@ def test_list_missing_files_present(tmp_path: Path):
         [course], [detail], download_dir=str(tmp_path), rule="both",
     )
     assert missing == []
+
+
+def test_list_missing_treats_stub_as_missing(tmp_path: Path):
+    """스텁(수 KB) 잔여 파일은 '있음'이 아니라 누락으로 — recover 가 재다운로드하도록.
+
+    회귀 방지: 실패 다운로드가 남긴 2,684B mp4 / 4,746B mp3 가 .exists() 로는
+    '존재'라 completed 강의가 재다운로드에서 영구 누락되던 버그.
+    """
+    course = _make_course()
+    lec = _make_lec("3316344")
+    detail = _make_detail([lec])
+
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp4, size=2684)  # 스텁
+    _touch(mp3, size=4746)  # 스텁
+
+    missing = list_missing_items(
+        [course], [detail], download_dir=str(tmp_path), rule="both",
+    )
+    assert len(missing) == 1
+    assert missing[0].lec.item_url == lec.item_url
 
 
 def test_list_missing_excludes_incomplete(tmp_path: Path):
