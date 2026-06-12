@@ -53,6 +53,10 @@ RUN uv run playwright install --with-deps chrome 2>/dev/null \
 
 # 소스 코드 복사
 COPY src/ ./src/
+# 유지보수 CLI (reconcile/recover/sanitize/migrate) — CLAUDE.md 가 문서화한
+# `docker compose run --rm study-helper python scripts/<name>.py` 가 실제로
+# 동작하려면 컨테이너 안에 scripts/ 가 있어야 한다.
+COPY scripts/ ./scripts/
 COPY CHANGELOG.md ./
 
 # 다운로드 경로 및 캐시 디렉토리 생성 후 appuser 로 chown
@@ -74,5 +78,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # 이후 모든 실행은 appuser 권한으로
 USER appuser
 
-# tini 로 Playwright/Chrome 자식 프로세스 signal forwarding + 좀비 수집
-ENTRYPOINT ["/usr/bin/tini", "--", "uv", "run", "--no-sync", "python", "src/main.py"]
+# tini 로 Playwright/Chrome 자식 프로세스 signal forwarding + 좀비 수집.
+# ENTRYPOINT 는 런타임(tini+uv)만 고정하고 실행 대상은 CMD 로 분리한다 — 이래야
+# `docker compose run --rm study-helper python scripts/<name>.py` 로 CMD 를 override 해
+# 유지보수 스크립트를 실행할 수 있다. (ENTRYPOINT 에 src/main.py 를 박으면 override
+# 인자가 main.py 의 무시되는 args 로 붙어 TUI 만 떴다.)
+ENTRYPOINT ["/usr/bin/tini", "--", "uv", "run", "--no-sync"]
+CMD ["python", "src/main.py"]

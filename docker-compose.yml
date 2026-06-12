@@ -1,15 +1,17 @@
 services:
   study-helper:
-    image: igor0670/study-helper:v1.1.1
-
-    # ── 소스 수정 후 로컬 빌드 시 위 줄을 아래로 교체 ─────────────
-    # build:
-    #   context: .
-    #   args:
-    #     # 호스트 사용자 UID/GID 로 컨테이너 appuser 를 맞춰 볼륨 권한 문제 회피
-    #     APP_UID: "${APP_UID:-1000}"
-    #     APP_GID: "${APP_GID:-1000}"
-    # image: study-helper:latest
+    # ── 로컬 빌드 기본 ───────────────────────────────────────────────
+    # Docker Hub 릴리즈 이미지(igor0670/study-helper)는 현재 미제공(manifest
+    # unknown)이라 로컬 빌드를 기본으로 한다. 빌드: `docker compose build`.
+    # 릴리즈 이미지가 다시 제공되면 아래 build 블록을 주석 처리하고
+    # `image: igor0670/study-helper:<tag>` 한 줄로 교체.
+    build:
+      context: .
+      args:
+        # 호스트 사용자 UID/GID 로 컨테이너 appuser 를 맞춰 볼륨 권한 문제 회피
+        APP_UID: "${APP_UID:-1000}"
+        APP_GID: "${APP_GID:-1000}"
+    image: study-helper:local
     # ──────────────────────────────────────────────────────────────────
 
     # CUI 인터랙션을 위한 터미널 연결
@@ -42,10 +44,13 @@ services:
       # :ro — 컨테이너 침해 시 키 변조 방지 (키 생성은 최초 실행 시 호스트에서)
       - ./.secret_key:/app/.secret_key:ro
 
-      # 소스 코드 실시간 반영 — 로컬 빌드 사용 시에만 활성화
-      # ── Docker Hub 이미지 사용 시 아래 두 줄 주석 처리 ───────────────
-      # - ./src:/app/src
-      # ──────────────────────────────────────────────────────────────────
+      # 소스 코드 실시간 반영 — 로컬 빌드 기본이므로 활성화 (코드 수정 후
+      # 재빌드 없이 재실행만으로 반영). 릴리즈 이미지로 되돌리면 아래 두 줄 주석 처리.
+      - ./src:/app/src
+      # 유지보수 스크립트 — `docker compose run --rm study-helper python scripts/<name>.py`
+      # 가 동작하려면 컨테이너에 scripts/ 가 있어야 한다 (이미지에도 COPY 되지만,
+      # 마운트로 재빌드 없이 최신 스크립트 반영).
+      - ./scripts:/app/scripts
 
       # 로그 파일 호스트 접근
       - ./logs:/app/logs
