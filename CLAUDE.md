@@ -34,6 +34,14 @@ Docker Hub 릴리즈 이미지 사용 시: `docker-compose.yml` 상단 주석 �
 | `sanitize_logs.py` | 기존 로그 파일에 `mask_sensitive` 소급 적용 (공유 전 필수) |
 | `migrate_drive_root_downloads.py` | Windows 드라이브 루트 `\data` 트랩의 파일을 프로젝트 `data/` 로 이관 |
 
+LMS 일정 파이프라인 3종은 예외적으로 **호스트에서 `uv run python -m scripts.<이름>`** 으로 실행한다 (Playwright 브라우저·Task Scheduler 연동이 호스트 기준):
+
+| 스크립트 | 용도 |
+|----------|------|
+| `export_lms_schedule.py` | LMS 미처리 항목·최근 공지를 read-only 수집해 JSON stdout 출력 (Hermes digest 소비) |
+| `calendarize_lms_schedule.py` | export JSON 을 Google Calendar 이벤트 후보로 분류 — 기본 dry-run, `--apply`+`--token` 시에만 실제 생성 |
+| `run_weekly_lms_schedule.py` | 위 둘을 잇는 무인 주간 러너 — Task Scheduler `SSU_LMS_Schedule_Weekly`(매주 화 09:00) 가 호출, 결과는 텔레그램 다이제스트. dry-run 전용 |
+
 ### 로그 기반 트러블슈팅
 
 다운로드/STT/요약 실패 시 [docs/log-troubleshooting.md](docs/log-troubleshooting.md) 의 grep 레시피 → reason 매트릭스 → 수정 포인트 순서로 추적. `logs/study_helper.log` 에는 요약, `logs/YYYYMMDD_HHMMSS_download.log` 에는 traceback.
@@ -147,7 +155,10 @@ study-helper/
 │   ├── reconcile_progress.py         # 파일시스템 ↔ auto_progress.json drift 재조정
 │   ├── recover_missing.py            # completed 인데 파일 없는 강의 일괄 재다운로드 (ProgressStore 연동)
 │   ├── sanitize_logs.py              # 기존 로그 파일에 mask_sensitive 소급 적용
-│   └── migrate_drive_root_downloads.py  # Windows 드라이브 루트 \data 트랩 → 프로젝트 data/ 이관
+│   ├── migrate_drive_root_downloads.py  # Windows 드라이브 루트 \data 트랩 → 프로젝트 data/ 이관
+│   ├── export_lms_schedule.py        # LMS 일정/공지 read-only 수집 → JSON stdout (호스트 uv 실행)
+│   ├── calendarize_lms_schedule.py   # export JSON → Google Calendar 후보 분류 (기본 dry-run)
+│   └── run_weekly_lms_schedule.py    # 주간 무인 러너 (Task Scheduler 화 09:00 → 텔레그램 다이제스트)
 └── tests/                            # pytest — atomic_write / crypto / config / download_state / logger_* 등
 ```
 

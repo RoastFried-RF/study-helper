@@ -278,6 +278,64 @@ def notify_download_gaps(
     return _send_message(bot_token, chat_id, "\n".join(lines))
 
 
+def format_weekly_lms_digest(
+    stats: dict,
+    create_top: list[str],
+    review_top: list[str],
+    errors: list[str] | None = None,
+) -> str:
+    """주간 LMS 일정 다이제스트 본문을 만든다 (순수 함수 — 단위 테스트 대상).
+
+    Args:
+        stats: export/캘린더화 통계(pending/announcements/create/manual_review/skipped)
+        create_top: 생성 후보 표시줄(이미 포맷된 문자열) 목록 — 상위 5건만 표시
+        review_top: 수동 확인 필요 표시줄 목록 — 상위 5건만 표시
+        errors: 수집 단계 오류 요약 — 앞쪽 3건만 표시
+    """
+    lines = [f"[주간 LMS 일정] 미처리 {stats.get('pending', 0)}건 · 공지 {stats.get('announcements', 0)}건"]
+    # 시청(출석) 단계가 수행된 실행에만 시청 결과 줄을 추가한다.
+    if "watch_total" in stats:
+        lines.append(
+            f"강의 시청 {stats.get('watched', 0)}/{stats.get('watch_total', 0)}건 성공"
+            f" · 실패 {stats.get('watch_failed', 0)}건"
+        )
+        if stats.get("summarized", 0) > 0:
+            lines[-1] += f" · 요약 {stats['summarized']}건"
+        if stats.get("download_failed", 0) > 0:
+            lines[-1] += f" · 다운실패 {stats['download_failed']}건"
+    lines.append(
+        f"캘린더 후보 {stats.get('create', 0)}건 · 수동확인 {stats.get('manual_review', 0)}건 · 제외 {stats.get('skipped', 0)}건"
+    )
+    if create_top:
+        lines.append("― 생성 후보 ―")
+        lines.extend(f"  • {row}" for row in create_top[:5])
+        if len(create_top) > 5:
+            lines.append(f"  ... 외 {len(create_top) - 5}건")
+    if review_top:
+        lines.append("― 수동 확인 필요 ―")
+        lines.extend(f"  • {row}" for row in review_top[:5])
+        if len(review_top) > 5:
+            lines.append(f"  ... 외 {len(review_top) - 5}건")
+    lines.extend(f"  ⚠ {err}" for err in (errors or [])[:3])
+    return "\n".join(lines)
+
+
+def notify_weekly_lms_digest(
+    bot_token: str,
+    chat_id: str,
+    stats: dict,
+    create_top: list[str],
+    review_top: list[str],
+    errors: list[str] | None = None,
+) -> bool:
+    """주간 LMS 일정 다이제스트(캘린더 후보 요약)를 전송한다.
+
+    `scripts/run_weekly_lms_schedule.py` 가 매주 화요일 무인 실행 결과를 보고할 때
+    사용한다. 본문 구성은 `format_weekly_lms_digest` 가 담당한다.
+    """
+    return _send_message(bot_token, chat_id, format_weekly_lms_digest(stats, create_top, review_top, errors))
+
+
 def notify_summary_complete(
     bot_token: str,
     chat_id: str,
