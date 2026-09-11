@@ -39,8 +39,7 @@ def test_module_logger_is_study_helper_child(module_name: str, attr: str) -> Non
     mod = importlib.import_module(module_name)
     logger = getattr(mod, attr)
     assert logger.name.startswith("study_helper"), (
-        f"{module_name}.{attr}.name = {logger.name!r} — "
-        f"study_helper 트리 밖 → silent log loss (LOG-SYS-1 회귀)"
+        f"{module_name}.{attr}.name = {logger.name!r} — study_helper 트리 밖 → silent log loss (LOG-SYS-1 회귀)"
     )
 
 

@@ -22,22 +22,47 @@ async def perform_login(page: Page, username: str, password: str) -> bool:
     보장되지 않지만(다른 레퍼런스/internal copy 가 있을 수 있음) best-effort 로 수행.
     """
     try:
+        # 2026-09 LMS 개편: canvas 접속 시 '로그인 할 사이트 선택'(canvas-discovery)
+        # 페이지가 먼저 뜬다. '숭실대학교'(a.btn-ssu-main) 를 눌러 SSO 선택 페이지로
+        # 진입한다(디스커버리가 없으면 기존 플로우 그대로).
+        discovery = await page.query_selector("a.btn-ssu-main")
+        if discovery:
+            await discovery.click()
+            await page.wait_for_load_state("networkidle")
+
+        # SSO 선택 페이지(xn-sso/login.php)의 '통합 로그인'(.login_btn a) 링크로
+        # smartid(smln.asp) 폼에 진입한다 — 개편 전후 공통 스텝.
         login_button = await page.query_selector(".login_btn a")
         if login_button:
             await login_button.click()
             await page.wait_for_load_state("networkidle")
 
-        await page.fill("input#userid", username)
-        await page.fill("input#pwd", password)
-
-        async with page.expect_navigation(wait_until="networkidle"):
+        # smartid 구형 폼(#userid) 이 기본이나, 향후 변형(#login_user_id) 도 병행 대기.
+        await page.wait_for_selector("input#userid, input#login_user_id", timeout=30_000)
+        if await page.query_selector("input#userid"):
+            # smartid Symtra SSO 폼 (2026-09 실측 유효)
+            await page.fill("input#userid", username)
+            await page.fill("input#pwd", password)
             await page.click("a.btn_login")
+        else:
+            # xn-sso 일반 로그인 계열 폼 폴백
+            await page.fill("input#login_user_id", username)
+            await page.fill("input#login_user_password", password)
+            await page.click("#general_login_btn")
 
-        if "login" in page.url:
-            _log.warning("로그인 실패: 제출 후에도 여전히 login 페이지 (%s)", page.url)
+        # 성공 판정은 positive check — canvas 도메인 복귀를 직접 기다린다 (감사 지적 반영).
+        # (a) 종전 `"login" in url` negative check 는 smln.asp 재표시(비밀번호 오류)를
+        #     성공으로 오판했고, (b) expect_navigation(networkidle) 은 상시 XHR 이 도는
+        #     대시보드/중간 콜백에서 navigation 완료를 못 보고 타임아웃난다.
+        try:
+            await page.wait_for_url(lambda u: "canvas.ssu.ac.kr" in u, timeout=30_000)
+        except Exception:
+            pass
+        if "canvas.ssu.ac.kr" not in page.url:
+            _log.warning("로그인 실패: 제출 후에도 SSO/login 페이지 체류 (%s)", page.url)
             return False
 
-        await page.wait_for_load_state("networkidle")
+        await page.wait_for_load_state("load")
         return True
 
     except Exception as e:

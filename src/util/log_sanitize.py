@@ -38,18 +38,14 @@ _SENSITIVE_KEYS = (
 )
 
 # Plain `key=value` (form body, 쿼리스트링 중 URL-decoded 섹션)
-_SENSITIVE_KV_RE = re.compile(
-    rf"(?i)({_SENSITIVE_KEYS})=([^&\s\"'<>]+)"
-)
+_SENSITIVE_KV_RE = re.compile(rf"(?i)({_SENSITIVE_KEYS})=([^&\s\"'<>]+)")
 
 # URL-encoded `key%3Dvalue` — `%3D` 는 `=` 의 URL-인코딩. LTI URL 이
 # body 안에 삽입되면 이중 인코딩되어 plain `=` 이 없기 때문에 별도 규칙 필요.
 # NF-04: 값 클래스가 `%` 를 통째로 제외하면 `%XX` 인코딩 시퀀스(예: `%40`=`@`)
 # 에서 매칭이 끊겨 그 이후 평문(이메일/토큰 잔여 부분)이 마스킹되지 않는다.
 # `(?:[^%&\s"'<>]|%[0-9A-Fa-f]{2})+` 로 정상 `%XX` 시퀀스는 값에 포함한다.
-_SENSITIVE_KV_URLENC_RE = re.compile(
-    rf"(?i)({_SENSITIVE_KEYS})%3D((?:[^%&\s\"'<>]|%[0-9A-Fa-f]{{2}})+)"
-)
+_SENSITIVE_KV_URLENC_RE = re.compile(rf"(?i)({_SENSITIVE_KEYS})%3D((?:[^%&\s\"'<>]|%[0-9A-Fa-f]{{2}})+)")
 
 # HTML meta / data-* attribute 계열
 # 1) <meta name="csrf-token|user_name|commons.user_name" content="...">
@@ -68,9 +64,7 @@ def mask_sensitive(text: str) -> str:
     text = _SENSITIVE_KV_RE.sub(lambda m: f"{m.group(1)}={MASK}", text)
     text = _SENSITIVE_KV_URLENC_RE.sub(lambda m: f"{m.group(1)}%3D{MASK}", text)
     text = _SENSITIVE_HTML_RE.sub(
-        lambda m: (m.group(1) or m.group(3) or "")
-        + MASK
-        + (m.group(2) or m.group(4) or ""),
+        lambda m: (m.group(1) or m.group(3) or "") + MASK + (m.group(2) or m.group(4) or ""),
         text,
     )
     return text

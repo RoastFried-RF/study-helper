@@ -12,6 +12,7 @@ def _new_store(tmp_path: Path) -> ProgressStore:
 
 # ── L1 regression: PROGRESS_SAVE_INTERVAL 환경변수 안전 파싱 ──────────────
 
+
 def test_save_interval_default(monkeypatch):
     """미설정 시 기본값 5."""
     monkeypatch.delenv("PROGRESS_SAVE_INTERVAL", raising=False)
@@ -285,8 +286,11 @@ def test_load_v2_handles_missing_play_fail_count(tmp_path: Path):
         "version": 2,
         "entries": {
             "u1": {
-                "played": True, "downloaded": True, "downloadable": True,
-                "reason": None, "ts": "2026-04-01T00:00:00+09:00",
+                "played": True,
+                "downloaded": True,
+                "downloadable": True,
+                "reason": None,
+                "ts": "2026-04-01T00:00:00+09:00",
             },
         },
     }
@@ -379,13 +383,13 @@ def test_maybe_flush_batches_writes(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(ps, "_SAVE_INTERVAL", 3)
     store = ps.ProgressStore(path=tmp_path / "auto_progress.json")
 
-    store.mark_played("a")          # _dirty=1
-    store.maybe_flush()             # 1 < 3 → 미기록
+    store.mark_played("a")  # _dirty=1
+    store.maybe_flush()  # 1 < 3 → 미기록
     assert not store.path.exists()
 
-    store.mark_played("b")          # _dirty=2
-    store.mark_played("c")          # _dirty=3
-    store.maybe_flush()             # 3 >= 3 → 기록
+    store.mark_played("b")  # _dirty=2 (더티 항목 2건)
+    store.mark_played("c")  # _dirty=3
+    store.maybe_flush()  # 3 >= 3 → 기록
     assert store.path.exists()
 
     reloaded = ps.ProgressStore(path=store.path)
@@ -400,8 +404,8 @@ def test_remove_then_mark_reactivates_entry(tmp_path: Path):
     store.mark_played("u")
     store.flush()
 
-    store.remove("u")          # _removed = {u}
-    store.mark_played("u")     # _touch → _removed.discard(u), _touched = {u}
+    store.remove("u")  # 제거 후: _removed = {u}
+    store.mark_played("u")  # _touch 이후: _removed.discard(u), _touched = {u}
     store.flush()
 
     reloaded = ProgressStore(path=path)
@@ -417,7 +421,7 @@ def test_mark_then_remove_deletes_entry(tmp_path: Path):
     store.flush()
 
     store.mark_download_success("u")  # _touched = {u}
-    store.remove("u")                 # _mark_removed → _touched.discard(u), _removed = {u}
+    store.remove("u")  # _mark_removed 이후: _touched.discard(u), _removed = {u}
     store.flush()
 
     reloaded = ProgressStore(path=path)

@@ -179,7 +179,9 @@ def test_filter_applies_to_propagated_records_via_handler(tmp_path, monkeypatch)
         h.flush()
 
     content = (tmp_path / "study_helper.log").read_text(encoding="utf-8")
-    assert "TOPSECRET123" not in content, f"PII masking 실패 — child 로거 propagate 경로에서 마스킹 누락: {content[-200:]}"
+    assert "TOPSECRET123" not in content, (
+        f"PII masking 실패 — child 로거 propagate 경로에서 마스킹 누락: {content[-200:]}"
+    )
     assert "REDACTED" in content or "oauth_signature=***" in content
 
     # 다음 테스트 오염 방지 — app logger 다시 초기화

@@ -68,7 +68,8 @@ def check_update(current_version: str) -> str | None:
 
         get_logger("updater").warning(
             "현재 버전 판정 불가(%r) — 버전 비교 생략, 최신 버전 %s 안내",
-            current_version, latest,
+            current_version,
+            latest,
         )
         return latest
     if latest_parsed > current_parsed:

@@ -41,14 +41,9 @@ class SensitiveFilter(logging.Filter):
                 record.msg = mask_sensitive(record.msg)
             if record.args:
                 if isinstance(record.args, tuple):
-                    record.args = tuple(
-                        mask_sensitive(a) if isinstance(a, str) else a for a in record.args
-                    )
+                    record.args = tuple(mask_sensitive(a) if isinstance(a, str) else a for a in record.args)
                 elif isinstance(record.args, dict):
-                    record.args = {
-                        k: (mask_sensitive(v) if isinstance(v, str) else v)
-                        for k, v in record.args.items()
-                    }
+                    record.args = {k: (mask_sensitive(v) if isinstance(v, str) else v) for k, v in record.args.items()}
         except Exception:
             # 로그 필터 자체의 실패가 앱을 중단시키면 안 된다.
             pass
@@ -73,6 +68,7 @@ def _logs_dir() -> Path:
     from src.config import get_logs_path
 
     return get_logs_path()
+
 
 _app_logger: logging.Logger | None = None
 

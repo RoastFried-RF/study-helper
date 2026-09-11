@@ -28,9 +28,7 @@ async def test_wait_for_lecture_render_returns_when_stable():
     iframe.query_selector_all = AsyncMock(side_effect=lambda *a, **k: [object()] * 5)
 
     # timeout 에 걸리지 않고 정상 반환되면 통과
-    await scraper._wait_for_lecture_render(
-        iframe, timeout=2.0, stable_checks=3, interval=0.01
-    )
+    await scraper._wait_for_lecture_render(iframe, timeout=2.0, stable_checks=3, interval=0.01)
 
 
 @pytest.mark.asyncio
@@ -43,21 +41,25 @@ async def test_wait_for_lecture_render_waits_for_late_badges():
     scraper = _make_scraper()
     iframe = AsyncMock()
     # (items, markers) 쌍 — 한 iteration 당 query_selector_all 2회 호출
-    counts = iter([
-        10, 2,    # iter1 — 배지 렌더 시작
-        10, 6,    # iter2 — 배지 증가 중
-        10, 10,   # iter3 — 배지 완료 (stable=0, prev 갱신)
-        10, 10,   # iter4 — stable=1
-        10, 10,   # iter5 — stable=2
-        10, 10,   # iter6 — stable=3 → 반환
-    ])
-    iframe.query_selector_all = AsyncMock(
-        side_effect=lambda *a, **k: [object()] * next(counts)
+    counts = iter(
+        [
+            10,
+            2,  # iter1 — 배지 렌더 시작
+            10,
+            6,  # iter2 — 배지 증가 중
+            10,
+            10,  # iter3 — 배지 완료 (stable=0, prev 갱신)
+            10,
+            10,  # 반복 4회차 -- stable=1
+            10,
+            10,  # 반복 5회차 -- stable=2
+            10,
+            10,  # iter6 — stable=3 → 반환
+        ]
     )
+    iframe.query_selector_all = AsyncMock(side_effect=lambda *a, **k: [object()] * next(counts))
 
-    await scraper._wait_for_lecture_render(
-        iframe, timeout=5.0, stable_checks=3, interval=0.01
-    )
+    await scraper._wait_for_lecture_render(iframe, timeout=5.0, stable_checks=3, interval=0.01)
     # counts 가 정확히 6쌍 소진되어야 함 (배지 안정 전 조기 반환 없음)
     with pytest.raises(StopIteration):
         next(counts)
@@ -77,9 +79,7 @@ async def test_wait_for_lecture_render_timeout_graceful():
     iframe.query_selector_all = AsyncMock(side_effect=_grow)
 
     # timeout 도달 시 RuntimeError 등 예외 없이 반환되어야 함
-    await scraper._wait_for_lecture_render(
-        iframe, timeout=0.3, stable_checks=3, interval=0.05
-    )
+    await scraper._wait_for_lecture_render(iframe, timeout=0.3, stable_checks=3, interval=0.05)
 
 
 @pytest.mark.asyncio
@@ -87,21 +87,25 @@ async def test_wait_for_lecture_render_ignores_zero_items():
     """항목이 0개인 동안은 안정으로 보지 않는다 (빈 DOM 조기 반환 방지)."""
     scraper = _make_scraper()
     iframe = AsyncMock()
-    counts = iter([
-        0, 0,    # iter1 — 아직 빈 DOM
-        0, 0,    # iter2 — 여전히 빈 DOM (items==0 이라 stable 누적 안 함)
-        7, 7,    # iter3
-        7, 7,    # iter4
-        7, 7,    # iter5
-        7, 7,    # iter6 → stable=3
-    ])
-    iframe.query_selector_all = AsyncMock(
-        side_effect=lambda *a, **k: [object()] * next(counts)
+    counts = iter(
+        [
+            0,
+            0,  # iter1 — 아직 빈 DOM
+            0,
+            0,  # iter2 — 여전히 빈 DOM (items==0 이라 stable 누적 안 함)
+            7,
+            7,  # iter3
+            7,
+            7,  # iter4
+            7,
+            7,  # iter5
+            7,
+            7,  # 반복 6회차 이후 stable=3
+        ]
     )
+    iframe.query_selector_all = AsyncMock(side_effect=lambda *a, **k: [object()] * next(counts))
 
-    await scraper._wait_for_lecture_render(
-        iframe, timeout=5.0, stable_checks=3, interval=0.01
-    )
+    await scraper._wait_for_lecture_render(iframe, timeout=5.0, stable_checks=3, interval=0.01)
     # 0,0 구간에서 조기 반환하지 않고 7,7 안정까지 전부 소진
     with pytest.raises(StopIteration):
         next(counts)

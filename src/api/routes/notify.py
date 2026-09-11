@@ -63,8 +63,13 @@ async def send_notification(body: NotifyRequest) -> dict[str, object]:
         from src.notifier.telegram_notifier import notify_playback_error
 
         ok = await asyncio.to_thread(
-            notify_playback_error, token, chat_id, body.course_name, body.week_label,
-            body.lecture_title, body.failed,
+            notify_playback_error,
+            token,
+            chat_id,
+            body.course_name,
+            body.week_label,
+            body.lecture_title,
+            body.failed,
         )
     elif body.message_type == "download_error":
         from src.notifier.telegram_notifier import notify_download_error

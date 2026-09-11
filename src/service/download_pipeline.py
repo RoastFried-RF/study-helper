@@ -165,7 +165,12 @@ async def run_pipeline(
     # 로그로 원인 추적(변수 값, call stack) 하려면 traceback 이 필수.
     _log.info(
         "파이프라인 시작 — mp4=%s audio_only=%s both=%s stt=%s ai=%s tg=%s",
-        mp4_path, audio_only, both, stt_enabled, ai_enabled, bool(tg_token and tg_chat_id),
+        mp4_path,
+        audio_only,
+        both,
+        stt_enabled,
+        ai_enabled,
+        bool(tg_token and tg_chat_id),
     )
 
     # ── 1. mp3 변환 ──────────────────────────────────────────────
@@ -291,11 +296,7 @@ async def run_pipeline(
     # (success == (not stage_errors) 불변식).
     # 단 TRANSCRIPT_EMPTY 는 무음/저음량 영상에 대한 의도적 "요약 생략" 센티넬
     # (실패 아님) 이므로 실패 판정에서 제외 — 파일 확보는 성공으로 본다.
-    _real_errors = {
-        stage: code
-        for stage, code in result.stage_errors.items()
-        if code != "TRANSCRIPT_EMPTY"
-    }
+    _real_errors = {stage: code for stage, code in result.stage_errors.items() if code != "TRANSCRIPT_EMPTY"}
     if _real_errors and result.success:
         result.success = False
         if not result.error:
@@ -305,7 +306,11 @@ async def run_pipeline(
 
     _log.info(
         "파이프라인 종료 — success=%s error=%r stages_failed=%s mp3=%s txt=%s summary=%s",
-        result.success, result.error, sorted(result.stage_errors.keys()),
-        bool(result.mp3_path), bool(result.txt_path), bool(result.summary_path),
+        result.success,
+        result.error,
+        sorted(result.stage_errors.keys()),
+        bool(result.mp3_path),
+        bool(result.txt_path),
+        bool(result.summary_path),
     )
     return result

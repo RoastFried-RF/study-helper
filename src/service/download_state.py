@@ -109,9 +109,7 @@ def list_missing_items(
             store_drift = (not fs_missing) and store_reason is not None
 
             if fs_missing or (include_fs_present_but_store_failed and store_drift):
-                missing.append(
-                    MissingItem(course=course, lec=lec, kind=kind, store_reason=store_reason)
-                )
+                missing.append(MissingItem(course=course, lec=lec, kind=kind, store_reason=store_reason))
     return missing
 
 

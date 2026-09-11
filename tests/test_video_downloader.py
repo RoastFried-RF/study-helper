@@ -28,6 +28,7 @@ from src.downloader.video_downloader import (
 
 # ── L1 regression: stub URL 사전 차단 ────────────────────────────
 
+
 class TestStubUrlFiltering:
     """Plan A DOM 폴링 + Plan B 네트워크 후킹 양쪽에서 stub 패턴이 제외되는지 검증.
 
@@ -73,6 +74,7 @@ class TestStubUrlFiltering:
 
 # ── 재시도 정책 (L1 두 번째 fix) ──────────────────────────────
 
+
 class TestIsNoRetryReason:
     """SUSPICIOUS_STUB 은 재시도 허용 대상임을 명시적으로 검증."""
 
@@ -102,6 +104,7 @@ class TestIsNoRetryReason:
 
 
 # ── H1 regression: HTTP 5xx 재시도 vs 4xx 즉시중단 ───────────────────
+
 
 class _FakeContext:
     async def cookies(self):
@@ -178,6 +181,7 @@ class TestHttpRetryClassification:
 
 # ── SSRF 방어 ────────────────────────────────────────────────
 
+
 class TestValidateMediaUrl:
     def test_allowed_ssu_host(self):
         _validate_media_url("https://commons.ssu.ac.kr/x/main.mp4")  # no raise
@@ -199,6 +203,7 @@ class TestValidateMediaUrl:
 
 
 # ── 파일명 sanitization ───────────────────────────────────────
+
 
 class TestSanitizeFilename:
     def test_strip_invalid_chars(self):
@@ -224,6 +229,7 @@ class TestSanitizeFilename:
 
 # ── 경로 생성 ────────────────────────────────────────────────
 
+
 class TestMakeFilepath:
     def test_basic_structure(self):
         """과목명/N주차/강의명.mp4 구조."""
@@ -248,6 +254,7 @@ class TestMakeFilepath:
 
 
 # ── 예외 계층 ────────────────────────────────────────────────
+
 
 class TestExceptions:
     def test_ssrf_is_value_error(self):

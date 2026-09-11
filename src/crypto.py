@@ -30,6 +30,7 @@ def _key_path() -> Path:
 
     return get_data_base() / ".secret_key"
 
+
 _KEYRING_SERVICE = "study-helper"
 
 # SEC-007: 사용자별 keyring namespace. 동일 머신에서 여러 OS 사용자가

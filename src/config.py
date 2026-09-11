@@ -21,7 +21,8 @@ KST = timezone(timedelta(hours=9))
 # .env 파일 경로: STUDY_HELPER_DATA_DIR이 설정되면 그 안의 .env를 사용
 _data_dir_env = os.getenv("STUDY_HELPER_DATA_DIR", "")
 _env_path = Path(_data_dir_env) / ".env" if _data_dir_env else Path(__file__).parent.parent / ".env"
-load_dotenv(_env_path)
+# .env를 설정의 SoT로 우선하며, 파일에 없는 STUDY_HELPER_* 런타임 주입 값은 유지한다.
+load_dotenv(_env_path, override=True)
 
 
 def _load_credential(env_key: str) -> str:
@@ -248,7 +249,8 @@ class Config:
                     "프로젝트 루트 기반 %r 로 매핑됩니다. 다른 위치를 원하시면 "
                     "`.env` 의 DOWNLOAD_DIR 을 Windows 경로 (예: "
                     "`C:/Users/...`)로 수정하세요.",
-                    raw, resolved,
+                    raw,
+                    resolved,
                 )
                 cls._drive_root_trap_warned = True
             return resolved
@@ -379,18 +381,10 @@ class Config:
             text = str(value)
             # newline / carriage return / 따옴표 / 백슬래시 / 선행·후행 공백이
             # 있으면 quoting 필요. 없으면 그대로 (기존 포맷 유지).
-            needs_quote = (
-                any(c in text for c in "\n\r\"\\")
-                or text != text.strip()
-            )
+            needs_quote = any(c in text for c in '\n\r"\\') or text != text.strip()
             if not needs_quote:
                 return text
-            escaped = (
-                text.replace("\\", "\\\\")
-                .replace('"', '\\"')
-                .replace("\r", "\\r")
-                .replace("\n", "\\n")
-            )
+            escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "\\r").replace("\n", "\\n")
             return f'"{escaped}"'
 
         def _load_lines() -> list[str]:

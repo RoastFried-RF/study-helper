@@ -1,11 +1,37 @@
 """config.py 단위 테스트."""
 
+import importlib.util
+import os
 from unittest.mock import patch
 
 import pytest
 
 import src.config as config_mod
 from src.config import Config, _default_download_dir, _read_version
+from src.util.atomic_write import atomic_write_text, file_lock
+
+
+def test_dotenv_overrides_ambient_config_preserves_runtime(monkeypatch, tmp_path):
+    """실제 설정 모듈 로딩 시 .env가 셸 설정을 이기고 런타임 주입 값은 유지된다."""
+    env_path = tmp_path / ".env"
+    with file_lock(env_path):
+        atomic_write_text(env_path, "AI_AGENT=gemini\n")
+    monkeypatch.setenv("AI_AGENT", "ambient")
+    runtime = {
+        "STUDY_HELPER_DATA_DIR": str(tmp_path),
+        "STUDY_HELPER_API_TOKEN": "test-runtime-token",
+        "STUDY_HELPER_API_PORT": "19090",
+        "STUDY_HELPER_API_ALLOW_NO_TOKEN": "0",
+    }
+    for key, value in runtime.items():
+        monkeypatch.setenv(key, value)
+    # 기존 Config 클래스 참조를 교체하지 않도록 독립 모듈로 실행한다.
+    spec = importlib.util.spec_from_file_location("isolated_config", config_mod.__file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.Config.AI_AGENT == os.environ["AI_AGENT"] == "gemini"
+    assert {key: os.environ[key] for key in runtime} == runtime
 
 
 def test_read_version():
@@ -148,9 +174,7 @@ def test_save_env_value_with_newline_round_trips(tmp_path):
     from dotenv import dotenv_values
 
     loaded = dotenv_values(env_path)
-    assert loaded["SUMMARY_PROMPT_EXTRA"] == multiline, (
-        f".env round-trip 손상: {loaded.get('SUMMARY_PROMPT_EXTRA')!r}"
-    )
+    assert loaded["SUMMARY_PROMPT_EXTRA"] == multiline, f".env round-trip 손상: {loaded.get('SUMMARY_PROMPT_EXTRA')!r}"
 
 
 def test_save_env_newline_value_does_not_corrupt_other_keys(tmp_path):
@@ -170,9 +194,7 @@ def test_save_env_newline_value_does_not_corrupt_other_keys(tmp_path):
     # SUMMARY_PROMPT_EXTRA 는 통째로 보존.
     assert loaded["SUMMARY_PROMPT_EXTRA"] == malicious
     # value 안의 'DOWNLOAD_RULE=video' 가 진짜 키를 덮어쓰면 안 된다.
-    assert loaded["DOWNLOAD_RULE"] == "audio", (
-        "newline value 안의 KEY=value 패턴이 별도 키로 주입됨"
-    )
+    assert loaded["DOWNLOAD_RULE"] == "audio", "newline value 안의 KEY=value 패턴이 별도 키로 주입됨"
     # 마찬가지로 TELEGRAM_ENABLED 가 잘못 삽입되면 안 됨.
     assert loaded.get("TELEGRAM_ENABLED") != "true"
 

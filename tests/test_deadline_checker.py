@@ -12,16 +12,16 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from src.config import KST
+from src.notifier.deadline_checker import (
+    _make_dedup_key,
+    find_approaching_deadlines,
+)
 from src.scraper.models import (
     Course,
     CourseDetail,
     LectureItem,
     LectureType,
     Week,
-)
-from src.notifier.deadline_checker import (
-    _make_dedup_key,
-    find_approaching_deadlines,
 )
 
 
@@ -96,9 +96,7 @@ def test_deadline_within_12h_suppresses_24h_key():
     key_24 = _make_dedup_key(course, lec, 24)
     key_12 = _make_dedup_key(course, lec, 12)
     assert item.dedup_key == key_12
-    assert item.suppress_keys == [key_24], (
-        "발송하지 않은 24h 키는 suppress_keys 로 넘겨져야 함 (R2-09)"
-    )
+    assert item.suppress_keys == [key_24], "발송하지 않은 24h 키는 suppress_keys 로 넘겨져야 함 (R2-09)"
 
 
 def test_check_and_notify_sends_one_and_records_suppressed_keys():
@@ -128,16 +126,12 @@ def test_check_and_notify_sends_one_and_records_suppressed_keys():
 
         return _cm()
 
-    with patch(
-        "src.notifier.telegram_notifier.notify_deadline_warning", return_value=True
-    ) as mock_notify, patch.object(
-        mod, "_load_notified", return_value=set()
-    ), patch(
-        "src.util.atomic_write.locked_transaction", side_effect=_fake_locked_transaction
+    with (
+        patch("src.notifier.telegram_notifier.notify_deadline_warning", return_value=True) as mock_notify,
+        patch.object(mod, "_load_notified", return_value=set()),
+        patch("src.util.atomic_write.locked_transaction", side_effect=_fake_locked_transaction),
     ):
-        sent = mod.check_and_notify_deadlines(
-            [course], [detail], token="t", chat_id="c"
-        )
+        sent = mod.check_and_notify_deadlines([course], [detail], token="t", chat_id="c")
 
     # 알림은 1건만 발송 (12h).
     assert mock_notify.call_count == 1, "동시 통과해도 텔레그램 발송은 1건"
@@ -147,9 +141,7 @@ def test_check_and_notify_sends_one_and_records_suppressed_keys():
     assert sent == 1
     key_24 = _make_dedup_key(course, lec, 24)
     key_12 = _make_dedup_key(course, lec, 12)
-    assert written["notified"] == {key_12, key_24}, (
-        "발송한 12h 키 + suppress 한 24h 키 모두 notified 에 기록돼야 함"
-    )
+    assert written["notified"] == {key_12, key_24}, "발송한 12h 키 + suppress 한 24h 키 모두 notified 에 기록돼야 함"
 
 
 def test_already_notified_threshold_not_resent():
@@ -162,9 +154,7 @@ def test_already_notified_threshold_not_resent():
 
     # 12h 키는 이미 발송됨 → 12h 는 suppress, 24h 만 남음.
     key_12 = _make_dedup_key(course, lec, 12)
-    items = find_approaching_deadlines(
-        [course], [detail], notified={key_12}, now=now
-    )
+    items = find_approaching_deadlines([course], [detail], notified={key_12}, now=now)
 
     assert len(items) == 1
     # passing 에서 12h 가 빠지면 chosen 은 24h.
@@ -181,9 +171,7 @@ def test_no_item_when_all_thresholds_notified():
 
     key_12 = _make_dedup_key(course, lec, 12)
     key_24 = _make_dedup_key(course, lec, 24)
-    items = find_approaching_deadlines(
-        [course], [detail], notified={key_12, key_24}, now=now
-    )
+    items = find_approaching_deadlines([course], [detail], notified={key_12, key_24}, now=now)
     assert items == []
 
 
@@ -212,16 +200,12 @@ def test_dedup_key_stable_across_title_change():
     """
     course = _course()
     lec_before = _assignment(title="과제 1", item_url="/courses/100/assignments/5", end_date="x")
-    lec_after = _assignment(
-        title="과제 1 (수정됨)", item_url="/courses/100/assignments/5", end_date="x"
-    )
+    lec_after = _assignment(title="과제 1 (수정됨)", item_url="/courses/100/assignments/5", end_date="x")
 
     for threshold in (24, 12):
         key_before = _make_dedup_key(course, lec_before, threshold)
         key_after = _make_dedup_key(course, lec_after, threshold)
-        assert key_before == key_after, (
-            f"제목 변경 시 dedup 키가 달라짐 (threshold={threshold}, COD-N01)"
-        )
+        assert key_before == key_after, f"제목 변경 시 dedup 키가 달라짐 (threshold={threshold}, COD-N01)"
 
 
 def test_dedup_key_differs_for_different_url():

@@ -116,9 +116,7 @@ def show_course_list(
     _redraw_course_list(courses, details, user_id, latest_version)
 
     while True:
-        choice = Prompt.ask(
-            "  과목 선택 [dim](0: 종료 / setting: 설정 / auto: 자동 모드 / recover: 누락 복구)[/dim]"
-        )
+        choice = Prompt.ask("  과목 선택 [dim](0: 종료 / setting: 설정 / auto: 자동 모드 / recover: 누락 복구)[/dim]")
         if choice == "0":
             return None
         if choice.lower() == "setting":

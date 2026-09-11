@@ -12,6 +12,7 @@ from src.player.background_player import (
 
 # ── TEST-002: 브라우저 death 판정 (SSOT) ──────────────────────────
 
+
 class TestIsBrowserDeadException:
     def test_connection_closed_is_dead(self):
         assert is_browser_dead_exception(Exception("Connection closed while reading from the driver"))
@@ -23,9 +24,7 @@ class TestIsBrowserDeadException:
         assert is_browser_dead_exception(Exception("BrowserContext.new_page: Connection closed"))
 
     def test_target_closed_is_dead(self):
-        assert is_browser_dead_exception(
-            Exception("Target page, context or browser has been closed")
-        )
+        assert is_browser_dead_exception(Exception("Target page, context or browser has been closed"))
 
     def test_unrelated_error_not_dead(self):
         assert not is_browser_dead_exception(Exception("404 Not Found"))
@@ -42,6 +41,7 @@ class TestIsBrowserDeadException:
 
 
 # ── TEST-004: Plan B duration 안전 파싱 (M2b) ─────────────────────
+
 
 class TestParseDuration:
     def test_numeric_string(self):
@@ -69,6 +69,7 @@ class TestParseDuration:
 
 
 # ── TEST-005: Plan A 재생 완료 판정 (M2b) ─────────────────────────
+
 
 class TestIsPlayComplete:
     def test_short_video_zero_current_not_complete(self):

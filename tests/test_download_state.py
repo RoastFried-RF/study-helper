@@ -66,7 +66,10 @@ def test_list_missing_files_absent(tmp_path: Path):
     detail = _make_detail([lec])
 
     missing = list_missing_items(
-        [course], [detail], download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        download_dir=str(tmp_path),
+        rule="both",
     )
     assert len(missing) == 1
     assert missing[0].lec.item_url == lec.item_url
@@ -85,7 +88,10 @@ def test_list_missing_files_present(tmp_path: Path):
     _touch(mp3)
 
     missing = list_missing_items(
-        [course], [detail], download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        download_dir=str(tmp_path),
+        rule="both",
     )
     assert missing == []
 
@@ -105,7 +111,10 @@ def test_list_missing_treats_stub_as_missing(tmp_path: Path):
     _touch(mp3, size=4746)  # 스텁
 
     missing = list_missing_items(
-        [course], [detail], download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        download_dir=str(tmp_path),
+        rule="both",
     )
     assert len(missing) == 1
     assert missing[0].lec.item_url == lec.item_url
@@ -118,7 +127,10 @@ def test_list_missing_excludes_incomplete(tmp_path: Path):
     detail = _make_detail([lec])
 
     missing = list_missing_items(
-        [course], [detail], download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        download_dir=str(tmp_path),
+        rule="both",
     )
     assert missing == []
 
@@ -137,7 +149,10 @@ def test_list_missing_excludes_non_downloadable(tmp_path: Path):
     assert not lec.is_downloadable
 
     missing = list_missing_items(
-        [course], [detail], download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        download_dir=str(tmp_path),
+        rule="both",
     )
     assert missing == []
 
@@ -153,7 +168,10 @@ def test_list_missing_records_store_drift_reason(tmp_path: Path):
     store.mark_download_failed(lec.full_url, reason="suspicious_stub")
 
     missing = list_missing_items(
-        [course], [detail], download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        download_dir=str(tmp_path),
+        rule="both",
         store=store,
     )
     assert len(missing) == 1
@@ -178,14 +196,20 @@ def test_list_missing_force_drift_includes_fs_present(tmp_path: Path):
 
     # 기본 (drift 제외)
     baseline = list_missing_items(
-        [course], [detail], download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        download_dir=str(tmp_path),
+        rule="both",
         store=store,
     )
     assert baseline == []
 
     # --force-drift 시 포함
     with_drift = list_missing_items(
-        [course], [detail], download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        download_dir=str(tmp_path),
+        rule="both",
         store=store,
         include_fs_present_but_store_failed=True,
     )
@@ -204,8 +228,11 @@ def test_reconcile_marks_unsupported_for_learningx(tmp_path: Path):
     store = ProgressStore(path=tmp_path / "progress.json")
 
     unsupported, confirmed = reconcile_store_with_filesystem(
-        [course], [detail], store,
-        download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        store,
+        download_dir=str(tmp_path),
+        rule="both",
     )
     assert unsupported == 1
     assert confirmed == 0
@@ -229,8 +256,11 @@ def test_reconcile_confirms_when_file_exists_but_store_failed(tmp_path: Path):
     store.mark_download_failed(lec.full_url, reason="suspicious_stub")
 
     unsupported, confirmed = reconcile_store_with_filesystem(
-        [course], [detail], store,
-        download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        store,
+        download_dir=str(tmp_path),
+        rule="both",
     )
     assert unsupported == 0
     assert confirmed == 1
@@ -264,8 +294,11 @@ def test_reconcile_confirms_when_lms_marks_incomplete(tmp_path: Path):
     store.mark_download_failed(lec.full_url, reason="network")
 
     unsupported, confirmed = reconcile_store_with_filesystem(
-        [course], [detail], store,
-        download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        store,
+        download_dir=str(tmp_path),
+        rule="both",
     )
     assert unsupported == 0
     assert confirmed == 1
@@ -290,8 +323,11 @@ def test_reconcile_no_op_when_store_already_correct(tmp_path: Path):
     store.mark_download_success(lec.full_url)
 
     _, confirmed = reconcile_store_with_filesystem(
-        [course], [detail], store,
-        download_dir=str(tmp_path), rule="both",
+        [course],
+        [detail],
+        store,
+        download_dir=str(tmp_path),
+        rule="both",
     )
     assert confirmed == 0
 
@@ -318,7 +354,9 @@ def test_config_windows_remaps_data_to_project_root(
         config_module.Config._drive_root_trap_warned = False
         monkeypatch.setattr(config_module.sys, "platform", "win32")
         monkeypatch.setattr(
-            config_module, "_is_docker_with_data_volume", lambda: False,
+            config_module,
+            "_is_docker_with_data_volume",
+            lambda: False,
         )
 
         result = config_module.Config.get_download_dir()
@@ -347,7 +385,9 @@ def test_config_windows_remaps_generic_unix_path(monkeypatch: pytest.MonkeyPatch
         config_module.Config._drive_root_trap_warned = False
         monkeypatch.setattr(config_module.sys, "platform", "win32")
         monkeypatch.setattr(
-            config_module, "_is_docker_with_data_volume", lambda: False,
+            config_module,
+            "_is_docker_with_data_volume",
+            lambda: False,
         )
 
         result = config_module.Config.get_download_dir()
