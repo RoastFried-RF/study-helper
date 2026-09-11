@@ -21,7 +21,8 @@ KST = timezone(timedelta(hours=9))
 # .env 파일 경로: STUDY_HELPER_DATA_DIR이 설정되면 그 안의 .env를 사용
 _data_dir_env = os.getenv("STUDY_HELPER_DATA_DIR", "")
 _env_path = Path(_data_dir_env) / ".env" if _data_dir_env else Path(__file__).parent.parent / ".env"
-load_dotenv(_env_path)
+# .env를 설정의 SoT로 우선하며, 파일에 없는 STUDY_HELPER_* 런타임 주입 값은 유지한다.
+load_dotenv(_env_path, override=True)
 
 
 def _load_credential(env_key: str) -> str:
