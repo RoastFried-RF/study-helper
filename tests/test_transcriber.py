@@ -187,17 +187,13 @@ def test_transcribe_lock_serializes_concurrent_calls(tmp_path):
         audio.write_bytes(b"fake")
         mod.transcribe(audio, model_size="base")
 
-    threads = [
-        threading.Thread(target=_worker, args=(f"lec{i}",)) for i in range(4)
-    ]
+    threads = [threading.Thread(target=_worker, args=(f"lec{i}",)) for i in range(4)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
 
-    assert state["max_active"] == 1, (
-        f"전사가 직렬화되지 않음 — 동시 진입 {state['max_active']} (NEW-08)"
-    )
+    assert state["max_active"] == 1, f"전사가 직렬화되지 않음 — 동시 진입 {state['max_active']} (NEW-08)"
 
     mod._model_cache.clear()
 
@@ -210,9 +206,7 @@ def test_transcribe_lock_and_unload_lock_ordering():
     """
     import src.stt.transcriber as mod
 
-    assert mod._transcribe_lock is not mod._model_lock, (
-        "전사 락과 모델 락은 별개 객체여야 함 (NEW-08)"
-    )
+    assert mod._transcribe_lock is not mod._model_lock, "전사 락과 모델 락은 별개 객체여야 함 (NEW-08)"
     # unload_model 이 전사 락을 잡아 in-flight 전사 완료를 기다리는지 — 락이
     # 이미 점유 중이면 unload 가 진입하지 못함을 확인.
     acquired = mod._transcribe_lock.acquire(blocking=False)
@@ -227,9 +221,7 @@ def test_transcribe_lock_and_unload_lock_ordering():
         t = threading.Thread(target=_try_unload, daemon=True)
         t.start()
         # 전사 락을 잡고 있는 동안 unload 는 완료되면 안 됨 (대기).
-        assert not done.wait(timeout=0.2), (
-            "전사 락 점유 중에도 unload 가 진행됨 — 직렬화 실패"
-        )
+        assert not done.wait(timeout=0.2), "전사 락 점유 중에도 unload 가 진행됨 — 직렬화 실패"
     finally:
         mod._transcribe_lock.release()
     # 락 해제 후에는 unload 가 완료돼야 함.

@@ -133,7 +133,7 @@ def test_decrypt_corrupted_key_logs_error(tmp_path):
         from src.crypto import decrypt
 
         with patch("src.logger.get_logger") as mock_get_logger:
-            with pytest.raises(Exception):
+            with pytest.raises(ValueError):
                 decrypt("enc:c29tZXRoaW5n")
         mock_get_logger.assert_called_once_with("crypto")
         mock_get_logger.return_value.error.assert_called_once()
@@ -178,8 +178,9 @@ def test_secret_key_written_atomically(tmp_path):
     with _patch_key_path(key_file):
         crypto._cached_fernet = None
         # keyring 은 환경에 따라 동작이 다르므로 비활성화 — 파일 경로 강제.
-        with patch.object(crypto, "_try_keyring_load", return_value=None), patch.object(
-            crypto, "_try_keyring_save", return_value=False
+        with (
+            patch.object(crypto, "_try_keyring_load", return_value=None),
+            patch.object(crypto, "_try_keyring_save", return_value=False),
         ):
             with patch(
                 "src.util.atomic_write.atomic_write_text",
@@ -208,8 +209,9 @@ def test_secret_key_no_partial_content_on_disk(tmp_path):
 
     with _patch_key_path(key_file):
         crypto._cached_fernet = None
-        with patch.object(crypto, "_try_keyring_load", return_value=None), patch.object(
-            crypto, "_try_keyring_save", return_value=False
+        with (
+            patch.object(crypto, "_try_keyring_load", return_value=None),
+            patch.object(crypto, "_try_keyring_save", return_value=False),
         ):
             crypto._load_or_create_key()
 
@@ -237,8 +239,9 @@ def test_secret_key_double_check_adopts_existing(tmp_path):
 
     with _patch_key_path(key_file):
         crypto._cached_fernet = None
-        with patch.object(crypto, "_try_keyring_load", return_value=None), patch.object(
-            crypto, "_try_keyring_save", return_value=False
+        with (
+            patch.object(crypto, "_try_keyring_load", return_value=None),
+            patch.object(crypto, "_try_keyring_save", return_value=False),
         ):
             key = crypto._load_or_create_key()
 

@@ -75,9 +75,7 @@ async def run_recover(scraper, courses, details) -> None:
         return
 
     # ── 순차 복구 실행 ─────────────────────────────────────
-    def _on_progress(
-        index: int, total: int, item: MissingItem, result: DownloadResult | Exception | None
-    ) -> None:
+    def _on_progress(index: int, total: int, item: MissingItem, result: DownloadResult | Exception | None) -> None:
         label = f"[{item.course.long_name}] {item.lec.title}"
         if result is None:
             console.print(f"\n  [{index}/{total}] {label}")

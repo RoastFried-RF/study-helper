@@ -48,6 +48,7 @@ from src.logger import get_logger
 
 _log = get_logger("service.progress_store")
 
+
 # M6: flush 배치 임계 — _dirty 가 이 값 이상 누적되면 maybe_flush() 가 flush().
 # PROGRESS_SAVE_INTERVAL=1 이면 강의마다 저장(기존 per-item 동작).
 def _resolve_save_interval() -> int:
@@ -93,15 +94,14 @@ def _parse_entries(raw: Any) -> dict[str, ProgressEntry]:
     # v1: 리스트 → 모든 URL을 "재생 완료, 다운로드/가능 여부 미확인"으로 마이그레이션
     if isinstance(raw, list):
         return {
-            url: ProgressEntry(played=True, downloaded=None, downloadable=None)
-            for url in raw
-            if isinstance(url, str)
+            url: ProgressEntry(played=True, downloaded=None, downloadable=None) for url in raw if isinstance(url, str)
         }
 
     # v2
     if isinstance(raw, dict) and raw.get("version") == 2:
         entries_raw = raw.get("entries", {})
         if isinstance(entries_raw, dict):
+
             def _to_int(v: Any) -> int:
                 try:
                     return int(v) if v is not None else 0
@@ -305,7 +305,9 @@ class ProgressStore:
         self._touch(url)
 
     def mark_play_failed(
-        self, url: str, threshold: int = PLAY_FAIL_QUARANTINE_THRESHOLD,
+        self,
+        url: str,
+        threshold: int = PLAY_FAIL_QUARANTINE_THRESHOLD,
     ) -> bool:
         """재생 시도 실패를 기록하고 누적 임계 초과 시 격리한다 (BUG-5).
 

@@ -191,9 +191,7 @@ def media_present(path: Path) -> bool:
         # 실제 파일시스템 문제를 가린다 — 미존재로 보수 판정하되 로그로 surface.
         from src.logger import get_logger
 
-        get_logger("downloader.paths").warning(
-            "media_present: stat 실패 — %s (%s)", exc, path.name
-        )
+        get_logger("downloader.paths").warning("media_present: stat 실패 — %s (%s)", exc, path.name)
         return False
 
 

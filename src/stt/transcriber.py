@@ -144,12 +144,16 @@ def _resolve_model_size(requested: str) -> str:
         if available >= _MODEL_RAM_BUDGET_MB.get(fallback, 10_000):
             _log.warning(
                 "Whisper %s 모델은 RAM %dMB 필요하나 가용 %dMB — %s 로 다운그레이드",
-                requested, needed, available, fallback,
+                requested,
+                needed,
+                available,
+                fallback,
             )
             return fallback
     # 가장 작은 모델도 부족 — 그래도 tiny 로 시도 (실패는 호출자가 처리)
     _log.warning(
-        "Whisper 모든 모델이 RAM 부족 (가용 %dMB) — tiny 로 시도", available,
+        "Whisper 모든 모델이 RAM 부족 (가용 %dMB) — tiny 로 시도",
+        available,
     )
     return "tiny"
 
@@ -267,7 +271,9 @@ def transcribe(audio_path: Path, model_size: str = "base", language: str = "") -
     if segment_count == 0 or total_chars == 0:
         _log.warning(
             "STT 결과 비어 있음 — 무음/저음량 가능 (segments=%d, chars=%d): %s",
-            segment_count, total_chars, audio_path.name,
+            segment_count,
+            total_chars,
+            audio_path.name,
         )
     else:
         _log.info("STT 완료 — segments=%d chars=%d: %s", segment_count, total_chars, audio_path.name)

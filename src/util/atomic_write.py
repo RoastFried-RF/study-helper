@@ -93,9 +93,7 @@ def file_lock(path: Path) -> Iterator[None]:
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                 acquired = True
             except OSError as e:
-                _log.warning(
-                    "file_lock: Windows advisory lock 획득 실패 — best-effort 모드로 진행: %s", e
-                )
+                _log.warning("file_lock: Windows advisory lock 획득 실패 — best-effort 모드로 진행: %s", e)
         else:
             import fcntl
 

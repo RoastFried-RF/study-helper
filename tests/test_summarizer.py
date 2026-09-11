@@ -79,9 +79,7 @@ def test_chunk_text_size_includes_user_prompt_header():
     assert len(chunks) > 1, "충분히 긴 입력은 여러 청크로 분할돼야 함"
     for chunk in chunks:
         prefixed_len = len(_USER_PROMPT_HEADER) + len(chunk)
-        assert prefixed_len <= _MAX_CHUNK_CHARS, (
-            f"prefix 포함 청크 길이 {prefixed_len} 가 상한 {_MAX_CHUNK_CHARS} 초과"
-        )
+        assert prefixed_len <= _MAX_CHUNK_CHARS, f"prefix 포함 청크 길이 {prefixed_len} 가 상한 {_MAX_CHUNK_CHARS} 초과"
 
 
 def test_chunk_text_short_input_single_chunk():
@@ -122,9 +120,7 @@ def test_summarize_chunked_truncation_marker(tmp_path):
     # 반환하도록 만들어, depth 상한에 도달해도 merged 가 절단되게 한다.
     big_reply = "요" * (_MAX_CHUNK_CHARS * 2)
 
-    with patch(
-        "src.summarizer.summarizer._call_summary", return_value=big_reply
-    ):
+    with patch("src.summarizer.summarizer._call_summary", return_value=big_reply):
         result = _summarize_chunked(
             "gemini",
             "key",
@@ -134,9 +130,7 @@ def test_summarize_chunked_truncation_marker(tmp_path):
             depth=0,
         )
 
-    assert result.endswith(_TRUNCATION_MARKER), (
-        "절단 발생 시 결과물 말미에 절단 마커가 있어야 함"
-    )
+    assert result.endswith(_TRUNCATION_MARKER), "절단 발생 시 결과물 말미에 절단 마커가 있어야 함"
 
 
 def test_summarize_chunked_no_marker_when_not_truncated(tmp_path):
@@ -148,9 +142,7 @@ def test_summarize_chunked_no_marker_when_not_truncated(tmp_path):
     )
 
     # 짧은 요약 응답 — merged 가 상한 이내라 절단 없음.
-    with patch(
-        "src.summarizer.summarizer._call_summary", return_value="짧은 요약"
-    ):
+    with patch("src.summarizer.summarizer._call_summary", return_value="짧은 요약"):
         result = _summarize_chunked(
             "gemini",
             "key",
@@ -172,9 +164,7 @@ def test_summarize_chunked_short_input_single_call(tmp_path):
 
     mock_call = MagicMock(return_value="요약")
     with patch("src.summarizer.summarizer._call_summary", mock_call):
-        result = _summarize_chunked(
-            "gemini", "key", "model", "system", "짧은 텍스트", depth=0
-        )
+        result = _summarize_chunked("gemini", "key", "model", "system", "짧은 텍스트", depth=0)
 
     assert result == "요약"
     assert mock_call.call_count == 1

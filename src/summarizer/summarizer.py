@@ -60,8 +60,8 @@ _EXTRA_PROMPT_TEMPLATE = "\n\n추가 지시사항:\n{extra}\n"
 # 한도를 초과한다. 청크로 나눠 각각 요약 후 통합한다.
 # Gemini 1.5 Flash 기준 12,000 자는 단일 호출 안전선.
 _MAX_CHUNK_CHARS = 12_000
-_CHUNK_OVERLAP = 500       # 청크 경계에서 문맥 단절 완화
-_MERGE_DEPTH_MAX = 3       # 부분 요약 통합 재귀 상한 (무한 재귀 방지)
+_CHUNK_OVERLAP = 500  # 청크 경계에서 문맥 단절 완화
+_MERGE_DEPTH_MAX = 3  # 부분 요약 통합 재귀 상한 (무한 재귀 방지)
 
 # 부분 요약 통합 단계의 시스템 프롬프트 prefix — 사용자(불신) 입력이 아닌
 # 개발자 정의 신뢰 영역. 부분 요약들을 하나로 합치도록 지시.
@@ -153,7 +153,12 @@ def _call_summary(agent: str, api_key: str, model: str, system_prompt: str, user
 
 
 def _summarize_chunked(
-    agent: str, api_key: str, model: str, system_prompt: str, text: str, depth: int,
+    agent: str,
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    text: str,
+    depth: int,
 ) -> str:
     """텍스트를 (필요 시 청크 분할 후) 요약한다.
 
@@ -164,8 +169,7 @@ def _summarize_chunked(
         return _call_summary(agent, api_key, model, system_prompt, _USER_PROMPT_HEADER + text)
 
     partials = [
-        _call_summary(agent, api_key, model, system_prompt, _USER_PROMPT_HEADER + chunk)
-        for chunk in _chunk_text(text)
+        _call_summary(agent, api_key, model, system_prompt, _USER_PROMPT_HEADER + chunk) for chunk in _chunk_text(text)
     ]
     merged = "\n\n".join(partials)
 
@@ -187,7 +191,9 @@ def _summarize_chunked(
         _log.warning(
             "요약 통합 입력 절단 — merged=%d자 > 상한 %d자 (depth=%d). "
             "강의 후반부 일부가 최종 요약에서 누락될 수 있음.",
-            len(merged), merge_budget, depth,
+            len(merged),
+            merge_budget,
+            depth,
         )
         if result and _TRUNCATION_MARKER not in result:
             result = result + _TRUNCATION_MARKER

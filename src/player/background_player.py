@@ -40,12 +40,12 @@ _VIDEO_SEL = "video.vc-vplay-video1"
 # ui/auto.py 의 브라우저 재시작 로직과 background_player 의 완료보고 단축이 같은
 # 판정을 공유하도록 이 저수준 모듈에 단일 정의하고, auto.py 는 이를 import 한다.
 _DEAD_BROWSER_MARKERS = (
-    "connection closed",                     # driver 연결 종료
+    "connection closed",  # driver 연결 종료
     "target page, context or browser has been closed",
     "browser has been closed",
     "browsercontext has been closed",
-    "browsercontext.new_page",               # 컨텍스트 자체가 죽었을 때 흔한 메시지
-    "websocket.",                            # playwright 내부 ws 예외
+    "browsercontext.new_page",  # 컨텍스트 자체가 죽었을 때 흔한 메시지
+    "websocket.",  # playwright 내부 ws 예외
 )
 
 
@@ -722,10 +722,7 @@ async def _play_via_progress_api(
             try:
                 # L1: 영상 초반 구간에서 int(...) 가 0 을 산출하던 것을 max(1,...) 로 가드.
                 # 같은 계산의 fake-video 경로(_play_lecture_inner)는 이미 max(1, ceil(...)) 사용 — 일관성.
-                cumulative_page = (
-                    total_page if current >= duration
-                    else max(1, int(current / duration * total_page))
-                )
+                cumulative_page = total_page if current >= duration else max(1, int(current / duration * total_page))
                 page_num = min(cumulative_page, total_page)
 
                 report_target, callback = _build_progress_url(
@@ -1019,7 +1016,8 @@ async def play_lecture(
                 from src.logger import get_logger
 
                 get_logger("player.background").error(
-                    "page.unroute('**/*.mp4') 실패 — 다운로드 단계에서 fake webm 가능: %s", _unroute_e,
+                    "page.unroute('**/*.mp4') 실패 — 다운로드 단계에서 fake webm 가능: %s",
+                    _unroute_e,
                 )
         # 더미 영상 바이트 즉시 해제
         _fake_video_bytes = None
@@ -1096,7 +1094,11 @@ async def _play_lecture_inner(
         if tool_frame and "learningx" in tool_frame.url:
             log(f"    → learningx 플레이어 감지: {tool_frame.url}")
             lx_state = await _play_via_learningx_api(
-                page, tool_frame.url, on_progress, log, fallback_duration,
+                page,
+                tool_frame.url,
+                on_progress,
+                log,
+                fallback_duration,
                 learningx_frame=tool_frame,
                 stop_event=stop_event,
             )
@@ -1110,7 +1112,11 @@ async def _play_lecture_inner(
                     if retry_frame:
                         log(f"    → commons frame 발견: {retry_frame.url}")
                         return await _play_via_progress_api(
-                            page, retry_frame.url, on_progress, log, fallback_duration,
+                            page,
+                            retry_frame.url,
+                            on_progress,
+                            log,
+                            fallback_duration,
                             stop_event=stop_event,
                         )
                 except Exception as retry_e:
@@ -1165,7 +1171,11 @@ async def _play_lecture_inner(
         log("    → video frame 없음. 진도 API 직접 호출 방식으로 전환...")
         log(f"    → player URL: {player_url_snapshot}")
         return await _play_via_progress_api(
-            page, player_url_snapshot, on_progress, log, fallback_duration,
+            page,
+            player_url_snapshot,
+            on_progress,
+            log,
+            fallback_duration,
             stop_event=stop_event,
         )
     log(f"    → video frame 발견: {frame.url}")
@@ -1190,7 +1200,11 @@ async def _play_lecture_inner(
         log(f"[6] 영상 로드 실패 → Plan B(진도 API) 전환 시도 (url={plan_b_url[:80]}...)")
         try:
             return await _play_via_progress_api(
-                page, plan_b_url, on_progress, log, fallback_duration,
+                page,
+                plan_b_url,
+                on_progress,
+                log,
+                fallback_duration,
                 stop_event=stop_event,
             )
         except Exception as plan_b_e:
@@ -1434,7 +1448,11 @@ async def _play_lecture_inner(
     if state.ended and state.duration > 0 and state.current < state.duration * 0.5:
         log(f"[7] 영상이 예상보다 일찍 종료 ({state.current:.1f}s / {state.duration:.1f}s) — Plan B로 전환")
         return await _play_via_progress_api(
-            page, player_url_snapshot, on_progress, log, fallback_duration,
+            page,
+            player_url_snapshot,
+            on_progress,
+            log,
+            fallback_duration,
             stop_event=stop_event,
         )
 

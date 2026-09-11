@@ -75,8 +75,25 @@ _DEFAULT_ALLOWED_HOSTS_SUFFIX = (".ssu.ac.kr", ".commonscdn.com", ".commonscdn.n
 # SEC-103: IDN TLD(`.xn--*`)는 PSL 검증이 없으므로 아예 패턴으로 차단한다.
 _EXTRA_HOSTS_BLOCKLIST = frozenset(
     {
-        ".com", ".net", ".org", ".io", ".co", ".kr", ".ac.kr", ".co.kr", ".or.kr", ".go.kr",
-        ".jp", ".co.jp", ".cn", ".com.cn", ".uk", ".co.uk", ".de", ".fr", ".us",
+        ".com",
+        ".net",
+        ".org",
+        ".io",
+        ".co",
+        ".kr",
+        ".ac.kr",
+        ".co.kr",
+        ".or.kr",
+        ".go.kr",
+        ".jp",
+        ".co.jp",
+        ".cn",
+        ".com.cn",
+        ".uk",
+        ".co.uk",
+        ".de",
+        ".fr",
+        ".us",
     }
 )
 
@@ -195,11 +212,11 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
     captured: dict[str, str | None] = {"url": None}
     _bg_task: asyncio.Task | None = None
     _content_parsed = False
-    _content_php_seen = False            # content.php 응답이 한 번이라도 도착했는가
+    _content_php_seen = False  # content.php 응답이 한 번이라도 도착했는가
     _content_php_parse_error: str | None = None  # Plan C 파싱 중 발생한 예외 메시지
-    _observed_hls = False                # m3u8/HLS URL 감지 시 실패 원인 분류에 사용
-    _observed_mp4_count = 0              # 관측된 mp4 URL 총 개수 (stub 포함)
-    _first_mp4_url: str | None = None    # 관측된 첫 mp4 URL (진단용, stub 판정에 도움)
+    _observed_hls = False  # m3u8/HLS URL 감지 시 실패 원인 분류에 사용
+    _observed_mp4_count = 0  # 관측된 mp4 URL 총 개수 (stub 포함)
+    _first_mp4_url: str | None = None  # 관측된 첫 mp4 URL (진단용, stub 판정에 도움)
 
     # stub 패턴 필터(_is_valid_mp4 / _is_stub_media_uri)는 모듈 레벨 SSOT 사용.
     def _note_observation(url: str) -> None:
@@ -280,7 +297,8 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
                     elif not media_uri:
                         _content_php_parse_error = "파싱 성공 but main_media 필드 부재"
                         _dl_log.info(
-                            "content.php 파싱됨 but main_media/media_uri 필드 없음 — url=%s", url,
+                            "content.php 파싱됨 but main_media/media_uri 필드 없음 — url=%s",
+                            url,
                         )
                         # R2-10: 첫 content.php 응답이 placeholder/필드 부재였다면
                         # 플래그를 풀어 다음 content.php 응답을 재파싱하도록 한다.
@@ -340,9 +358,7 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
             # 대상이 아니라 UNSUPPORTED 로 분류해 자동 모드가 영원히 루프 돌지
             # 않도록 한다. (lecture_type 가 MOVIE 라도 런타임에 감지되는 경우)
             all_frame_urls = [f.url for f in page.frames]
-            has_learningx_lti = any(
-                "learningx/lti/lecture_attendance" in url for url in all_frame_urls
-            )
+            has_learningx_lti = any("learningx/lti/lecture_attendance" in url for url in all_frame_urls)
             has_commons = any("commons.ssu.ac.kr" in url for url in all_frame_urls)
             diag = {
                 "frames": [u[:80] for u in all_frame_urls[:5]],
@@ -352,8 +368,9 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
 
             if has_learningx_lti and not has_commons:
                 _dl_log.warning(
-                    "다운로드 구조적 불가 — learningx LTI 전용 플레이어 (commons iframe 부재). "
-                    "url=%s diag=%s", lecture_url, diag,
+                    "다운로드 구조적 불가 — learningx LTI 전용 플레이어 (commons iframe 부재). url=%s diag=%s",
+                    lecture_url,
+                    diag,
                 )
                 return ExtractionResult(
                     url=None,
@@ -447,27 +464,32 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
         if _observed_hls and _observed_mp4_count == 0:
             _dl_log.warning(
                 "URL 추출 실패 (HLS only) — mp4 경로 없어 현재 다운로더 미지원. url=%s diag=%s",
-                lecture_url, diag,
+                lecture_url,
+                diag,
             )
             return ExtractionResult(url=None, reason=REASON_URL_EXTRACT_HLS_ONLY, diagnostics=diag)
 
         if _content_php_seen and _content_php_parse_error:
             _dl_log.warning(
                 "URL 추출 실패 (content.php 파싱 실패) — %s. url=%s",
-                _content_php_parse_error, lecture_url,
+                _content_php_parse_error,
+                lecture_url,
             )
             return ExtractionResult(url=None, reason=REASON_URL_EXTRACT_CONTENT_PHP_PARSE, diagnostics=diag)
 
         if not _content_php_seen:
             _dl_log.warning(
                 "URL 추출 실패 (content.php 응답 없음) — 플레이어 iframe 로드 문제 가능. url=%s diag=%s",
-                lecture_url, diag,
+                lecture_url,
+                diag,
             )
             return ExtractionResult(url=None, reason=REASON_URL_EXTRACT_CONTENT_PHP_MISSING, diagnostics=diag)
 
         _dl_log.warning(
             "URL 추출 실패 (%ds 폴링 timeout) — mp4/HLS 모두 미관측. url=%s diag=%s",
-            int(_VIDEO_POLL_MAX * _POLL_INTERVAL_SEC), lecture_url, diag,
+            int(_VIDEO_POLL_MAX * _POLL_INTERVAL_SEC),
+            lecture_url,
+            diag,
         )
         return ExtractionResult(url=None, reason=REASON_URL_EXTRACT_TIMEOUT, diagnostics=diag)
 
@@ -530,8 +552,13 @@ async def download_video_with_browser(
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             await asyncio.to_thread(
-                _stream_download, url, save_path, thread_progress,
-                attempt=attempt, cookies=cookies, referer=referer,
+                _stream_download,
+                url,
+                save_path,
+                thread_progress,
+                attempt=attempt,
+                cookies=cookies,
+                referer=referer,
             )
             return save_path.resolve()
         except requests.exceptions.HTTPError as e:
@@ -565,8 +592,6 @@ async def download_video_with_browser(
     raise last_error
 
 
-
-
 def _stream_download(
     url: str,
     save_path: Path,
@@ -579,7 +604,10 @@ def _stream_download(
     # 을 호출하여 save_path 를 삭제하므로 이어받기가 성립할 조건 자체가 없었다.
     # 실제로는 매번 처음부터 다시 다운로드. attempt 는 진단 로그용.
     _dl_log.info(
-        "다운로드 시도 %d/%d — path=%s", attempt, _MAX_RETRIES, save_path.name,
+        "다운로드 시도 %d/%d — path=%s",
+        attempt,
+        _MAX_RETRIES,
+        save_path.name,
     )
     headers: dict[str, str] = {"Referer": referer} if referer else {}
 
@@ -616,7 +644,10 @@ def _stream_download(
         _ct = response.headers.get("content-type", "?")
         _dl_log.info(
             "다운로드 응답 — status=%s content-type=%s content-length=%s path=%s",
-            response.status_code, _ct, total, save_path.name,
+            response.status_code,
+            _ct,
+            total,
+            save_path.name,
         )
 
         with open(save_path, mode) as f:
@@ -657,7 +688,9 @@ def _validate_downloaded_file(save_path: Path) -> None:
     if _head[:4] == b"\x1a\x45\xdf\xa3":
         _dl_log.error(
             "다운로드 파일이 WebM(EBML) 시그니처 — fake webm 누출 의심. magic=%s size=%d path=%s",
-            _magic_hex, _size, save_path,
+            _magic_hex,
+            _size,
+            save_path,
         )
         _remove_partial(save_path)
         raise SuspiciousStubError(
@@ -674,12 +707,12 @@ def _validate_downloaded_file(save_path: Path) -> None:
     if _size < _MIN_PLAUSIBLE_VIDEO_BYTES:
         _dl_log.error(
             "다운로드 파일 크기 비정상 (< %d bytes) — CDN stub 가능. size=%d path=%s",
-            _MIN_PLAUSIBLE_VIDEO_BYTES, _size, save_path,
+            _MIN_PLAUSIBLE_VIDEO_BYTES,
+            _size,
+            save_path,
         )
         _remove_partial(save_path)
-        raise SuspiciousStubError(
-            f"다운로드 파일 크기 비정상 ({_size} bytes) — 실제 강의가 아닌 stub 가능"
-        )
+        raise SuspiciousStubError(f"다운로드 파일 크기 비정상 ({_size} bytes) — 실제 강의가 아닌 stub 가능")
 
     _dl_log.debug("다운로드 파일 검증 통과 — magic=%s size=%d", _magic_hex, _size)
 

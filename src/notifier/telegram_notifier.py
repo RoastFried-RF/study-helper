@@ -110,9 +110,7 @@ def _send_message_verify(bot_token: str, chat_id: str, text: str) -> tuple[bool,
     last_status: int | None = None
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = requests.post(
-                url, json={"chat_id": chat_id, "text": text}, timeout=10
-            )
+            resp = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
             try:
                 if resp.ok:
                     try:
@@ -132,9 +130,7 @@ def _send_message_verify(bot_token: str, chat_id: str, text: str) -> tuple[bool,
             finally:
                 resp.close()
         except requests.exceptions.RequestException as e:
-            _log.warning(
-                "Telegram sendMessage(verify) 네트워크 오류: %s", type(e).__name__
-            )
+            _log.warning("Telegram sendMessage(verify) 네트워크 오류: %s", type(e).__name__)
             last_status = None
         if attempt < _MAX_RETRIES - 1:
             time.sleep(_RETRY_BASE_DELAY * (2**attempt))
@@ -156,7 +152,8 @@ def _send_document(bot_token: str, chat_id: str, file_path: Path, caption: str =
     if size > _TELEGRAM_MAX_DOCUMENT_BYTES:
         _log.warning(
             "Telegram sendDocument: 파일이 50MB 초과 — 전송 생략 (%d bytes): %s",
-            size, file_path.name,
+            size,
+            file_path.name,
         )
         return False
     # retry 루프에서 동일 bytes 를 재사용할 수 있도록 미리 로드 (50MB 상한)

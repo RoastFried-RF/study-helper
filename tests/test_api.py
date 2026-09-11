@@ -20,8 +20,8 @@ import pytest
 # FastAPI TestClient 는 httpx 를 요구한다. Docker 컨테이너에는 설치돼 있으나
 # 호스트 환경에 없을 수 있어 graceful skip.
 pytest.importorskip("httpx")
-from fastapi.testclient import TestClient  # noqa: E402
-from starlette.websockets import WebSocketDisconnect  # noqa: E402
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 _TEST_TOKEN = "test-secret-token-abcdef0123456789"
 
@@ -97,17 +97,13 @@ def test_protected_route_without_auth_header_returns_401(authed_client):
 
 def test_protected_route_with_wrong_token_returns_403(authed_client):
     """SEC-002: 잘못된 Bearer 토큰 → 403."""
-    resp = authed_client.get(
-        "/config/credentials", headers=_auth_header("wrong-token-value")
-    )
+    resp = authed_client.get("/config/credentials", headers=_auth_header("wrong-token-value"))
     assert resp.status_code == 403
 
 
 def test_protected_route_with_malformed_authorization_returns_401(authed_client):
     """SEC-002: 'Bearer ' 접두사 없는 Authorization 헤더 → 401."""
-    resp = authed_client.get(
-        "/config/credentials", headers={"Authorization": _TEST_TOKEN}
-    )
+    resp = authed_client.get("/config/credentials", headers={"Authorization": _TEST_TOKEN})
     assert resp.status_code == 401
 
 
@@ -205,9 +201,7 @@ def test_ws_pipeline_non_json_auth_message(authed_client):
         ws.send_text("this-is-not-json{{{")
         msg = ws.receive_json()
         assert msg["type"] == "error"
-        assert msg["message"] == "INVALID_AUTH_MESSAGE", (
-            f"비-JSON 인증 입력이 잘못 분류됨: {msg}"
-        )
+        assert msg["message"] == "INVALID_AUTH_MESSAGE", f"비-JSON 인증 입력이 잘못 분류됨: {msg}"
         # PIPELINE_ERROR 로 새지 않았는지 명시 확인.
         assert msg["message"] != "PIPELINE_ERROR"
         # 서버가 close(4003) 했으므로 추가 수신 시 WebSocketDisconnect(code=4003).
@@ -248,9 +242,7 @@ def test_ws_pipeline_wrong_token_closes_4003(authed_client):
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_ws_pipeline_path_outside_base_dir_returns_path_invalid(
-    authed_client, tmp_path, monkeypatch
-):
+def test_ws_pipeline_path_outside_base_dir_returns_path_invalid(authed_client, tmp_path, monkeypatch):
     """API-F2: 인증 통과 후 base_dir 밖 mp4_path → 'PATH_INVALID' + close(4003).
     HTTPException 이 WS 컨텍스트에서 PIPELINE_ERROR 로 오표기되면 안 된다.
     """
@@ -272,9 +264,7 @@ def test_ws_pipeline_path_outside_base_dir_returns_path_invalid(
         )
         msg = ws.receive_json()
         assert msg["type"] == "error"
-        assert msg["message"] == "PATH_INVALID", (
-            f"base_dir 밖 경로가 PATH_INVALID 로 분류되지 않음 (오표기): {msg}"
-        )
+        assert msg["message"] == "PATH_INVALID", f"base_dir 밖 경로가 PATH_INVALID 로 분류되지 않음 (오표기): {msg}"
         # PIPELINE_ERROR 로 새지 않았는지 명시 확인 (API-F2 핵심).
         assert msg["message"] != "PIPELINE_ERROR"
         with pytest.raises(WebSocketDisconnect) as exc_info:

@@ -236,7 +236,7 @@ def test_file_present_empty_rule_requires_both(tmp_path: Path):
     course = _make_course()
     lec = _make_lec()
 
-    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    mp4, _mp3 = expected_paths(tmp_path, course, lec)
     _touch(mp4)  # mp4 만 생성, mp3 없음
 
     # 수정 전 OR fallback 이면 True 로 오판정 → 변환/STT 건너뜀
@@ -250,7 +250,7 @@ def test_file_present_empty_rule_mp3_only_is_false(tmp_path: Path):
     course = _make_course()
     lec = _make_lec()
 
-    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _mp4, mp3 = expected_paths(tmp_path, course, lec)
     _touch(mp3)  # mp3 만 생성
 
     assert file_present(tmp_path, course, lec, "") is False
@@ -273,7 +273,7 @@ def test_file_present_unknown_rule_requires_both(tmp_path: Path):
     course = _make_course()
     lec = _make_lec()
 
-    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    mp4, _mp3 = expected_paths(tmp_path, course, lec)
     _touch(mp4)
 
     assert file_present(tmp_path, course, lec, "garbage-rule") is False

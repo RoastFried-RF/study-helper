@@ -99,9 +99,7 @@ class LectureItem:
             return False
         # 경로 세그먼트 단위 매칭 (예: /learningx/lti/...)
         path_segments = [seg.lower() for seg in parsed.path.split("/") if seg]
-        if "learningx" in path_segments:
-            return False
-        return True
+        return "learningx" not in path_segments
 
     # 경로 계산(expected_paths/file_present)은 scraper → downloader 역방향 의존을 피하기
     # 위해 src/downloader/paths.py의 순수 함수로 이동했다. 호출부는 `from

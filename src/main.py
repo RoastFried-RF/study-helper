@@ -46,9 +46,7 @@ async def _await_enter(prompt: str = "\n  Enter를 눌러 계속...") -> None:
             line = sys.stdin.readline()
         except Exception:
             line = ""
-        loop.call_soon_threadsafe(
-            lambda: fut.set_result(line) if not fut.done() else None
-        )
+        loop.call_soon_threadsafe(lambda: fut.set_result(line) if not fut.done() else None)
 
     threading.Thread(target=_read_one, daemon=True).start()
     await fut

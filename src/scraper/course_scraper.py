@@ -285,17 +285,19 @@ class CourseScraper:
                             )
                             # URL은 파일 로그에만 기록 (UI 콜백에 내부 URL 노출 방지)
                             self._file_log.warning(
-                                "강의 로딩 실패 상세 — url=%s", course.lectures_url,
+                                "강의 로딩 실패 상세 — url=%s",
+                                course.lectures_url,
                             )
                             # 지수 백오프: 1s, 2s, 4s — 첫 실패는 warmup, 이후는 실제 문제
-                            await asyncio.sleep(2 ** attempt)
+                            await asyncio.sleep(2**attempt)
                         else:
                             self._log(
                                 f"강의 로딩 실패 ({course.long_name}): [{err_type}] {e}",
                                 "error",
                             )
                             self._file_log.error(
-                                "강의 로딩 실패 상세 — url=%s", course.lectures_url,
+                                "강의 로딩 실패 상세 — url=%s",
+                                course.lectures_url,
                             )
                             results[idx] = None
                     finally:
@@ -392,9 +394,7 @@ class CourseScraper:
         while time.monotonic() < deadline:
             items = len(await iframe.query_selector_all(".xnmb-module_item-outer-wrapper"))
             markers = len(
-                await iframe.query_selector_all(
-                    "[class*='module_item-completed'], [class*='attendance_status']"
-                )
+                await iframe.query_selector_all("[class*='module_item-completed'], [class*='attendance_status']")
             )
             snapshot = (items, markers)
             if snapshot == prev and items > 0:

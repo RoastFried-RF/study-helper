@@ -249,7 +249,8 @@ class Config:
                     "프로젝트 루트 기반 %r 로 매핑됩니다. 다른 위치를 원하시면 "
                     "`.env` 의 DOWNLOAD_DIR 을 Windows 경로 (예: "
                     "`C:/Users/...`)로 수정하세요.",
-                    raw, resolved,
+                    raw,
+                    resolved,
                 )
                 cls._drive_root_trap_warned = True
             return resolved
@@ -380,18 +381,10 @@ class Config:
             text = str(value)
             # newline / carriage return / 따옴표 / 백슬래시 / 선행·후행 공백이
             # 있으면 quoting 필요. 없으면 그대로 (기존 포맷 유지).
-            needs_quote = (
-                any(c in text for c in "\n\r\"\\")
-                or text != text.strip()
-            )
+            needs_quote = any(c in text for c in '\n\r"\\') or text != text.strip()
             if not needs_quote:
                 return text
-            escaped = (
-                text.replace("\\", "\\\\")
-                .replace('"', '\\"')
-                .replace("\r", "\\r")
-                .replace("\n", "\\n")
-            )
+            escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "\\r").replace("\n", "\\n")
             return f'"{escaped}"'
 
         def _load_lines() -> list[str]:

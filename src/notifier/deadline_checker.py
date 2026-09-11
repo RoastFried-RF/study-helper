@@ -190,8 +190,7 @@ def find_approaching_deadlines(
                 passing = [
                     threshold
                     for threshold in _THRESHOLDS
-                    if remaining_hours <= threshold
-                    and _make_dedup_key(course, lec, threshold) not in notified
+                    if remaining_hours <= threshold and _make_dedup_key(course, lec, threshold) not in notified
                 ]
                 if not passing:
                     continue
@@ -205,9 +204,7 @@ def find_approaching_deadlines(
                         threshold=chosen,
                         dedup_key=_make_dedup_key(course, lec, chosen),
                         suppress_keys=[
-                            _make_dedup_key(course, lec, threshold)
-                            for threshold in passing
-                            if threshold != chosen
+                            _make_dedup_key(course, lec, threshold) for threshold in passing if threshold != chosen
                         ],
                     )
                 )
@@ -273,13 +270,16 @@ def check_and_notify_deadlines(
     # locked_transaction 이 디스크 최신본을 다시 읽어 merge — 자동 모드와 수동
     # deadline check 가 동시 실행돼도 서로의 변경을 덮어쓰지 않는다.
     if stale_keys or sent_keys:
+
         def _apply(disk: set[str]) -> None:
             disk -= stale_keys
             disk |= sent_keys
 
         try:
             with locked_transaction(
-                _DEADLINE_FILE, load_fn=_load_notified, save_fn=_write_notified,
+                _DEADLINE_FILE,
+                load_fn=_load_notified,
+                save_fn=_write_notified,
             ) as disk:
                 _apply(disk)
         except Exception as e:

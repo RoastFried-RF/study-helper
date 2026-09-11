@@ -20,7 +20,9 @@ def watch_env(monkeypatch, tmp_path):
 
     courses = [SimpleNamespace(long_name=f"과목{i}") for i in range(2)]
     lectures = [
-        SimpleNamespace(title=f"강의{i}", full_url=f"https://canvas.ssu.ac.kr/lecture/{i}", needs_watch=True, attendance="")
+        SimpleNamespace(
+            title=f"강의{i}", full_url=f"https://canvas.ssu.ac.kr/lecture/{i}", needs_watch=True, attendance=""
+        )
         for i in range(2)
     ]
     scraper = SimpleNamespace(
@@ -53,8 +55,14 @@ def watch_env(monkeypatch, tmp_path):
     monkeypatch.setattr(RetryPolicy, "PLAY", 2)
     monkeypatch.setattr(runner.asyncio, "sleep", AsyncMock())
     return SimpleNamespace(
-        courses=courses, lectures=lectures, scraper=scraper, store=store,
-        play=play, dl=dl, recover=recover, present=present,
+        courses=courses,
+        lectures=lectures,
+        scraper=scraper,
+        store=store,
+        play=play,
+        dl=dl,
+        recover=recover,
+        present=present,
     )
 
 
@@ -200,9 +208,14 @@ async def test_excluded_lectures_are_not_downloaded(watch_env, skip):
 
 @pytest.mark.parametrize(
     ("rule", "normalized", "audio_only", "both"),
-    [("both", "both", False, True), (" AUDIO ", "audio", True, False),
-     ("video", "video", False, False), ("", "both", False, True),
-     (None, "both", False, True), (" \t ", "both", False, True)],
+    [
+        ("both", "both", False, True),
+        (" AUDIO ", "audio", True, False),
+        ("video", "video", False, False),
+        ("", "both", False, True),
+        (None, "both", False, True),
+        (" \t ", "both", False, True),
+    ],
 )
 async def test_download_backlog_ignores_zero_watch_limit(watch_env, monkeypatch, rule, normalized, audio_only, both):
     env = watch_env

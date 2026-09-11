@@ -127,9 +127,7 @@ async def run_recovery(
         _log.info("복구 중 (%d/%d): %s", i, total, label)
 
         try:
-            result = await run_download(
-                scraper.page, item.lec, item.course, audio_only=audio_only, both=both
-            )
+            result = await run_download(scraper.page, item.lec, item.course, audio_only=audio_only, both=both)
         except Exception as e:
             _log.error("복구 예외: %s — %s", label, e, exc_info=True)
             reasons[f"exception:{type(e).__name__}"] += 1

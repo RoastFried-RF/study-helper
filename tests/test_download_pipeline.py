@@ -12,8 +12,6 @@ import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from src.service.download_pipeline import run_pipeline
 
 
@@ -34,14 +32,8 @@ def test_convert_only_success(tmp_path):
     mp3 = tmp_path / "lecture.mp3"
     mp3.write_bytes(b"fake mp3")
 
-    with patch(
-        "src.converter.audio_converter.convert_to_mp3", return_value=mp3
-    ):
-        result = _run(
-            run_pipeline(
-                mp4, "과목", "1주차", "강의", both=True, stt_enabled=False, ai_enabled=False
-            )
-        )
+    with patch("src.converter.audio_converter.convert_to_mp3", return_value=mp3):
+        result = _run(run_pipeline(mp4, "과목", "1주차", "강의", both=True, stt_enabled=False, ai_enabled=False))
 
     assert result.success is True
     assert result.stage_errors == {}
@@ -56,9 +48,7 @@ def test_convert_failure_sets_success_false(tmp_path):
         "src.converter.audio_converter.convert_to_mp3",
         side_effect=RuntimeError("mp3 변환 실패: encoding error"),
     ):
-        result = _run(
-            run_pipeline(mp4, "과목", "1주차", "강의", both=True)
-        )
+        result = _run(run_pipeline(mp4, "과목", "1주차", "강의", both=True))
 
     assert result.success is False
     assert "convert" in result.stage_errors
@@ -75,12 +65,14 @@ def test_convert_success_stt_failure_sets_success_false(tmp_path):
     mp3 = tmp_path / "lecture.mp3"
     mp3.write_bytes(b"fake mp3")
 
-    with patch(
-        "src.converter.audio_converter.convert_to_mp3", return_value=mp3
-    ), patch(
-        "src.stt.transcriber.transcribe",
-        side_effect=RuntimeError("disk full"),
-    ), patch("src.stt.transcriber.safe_unload"):
+    with (
+        patch("src.converter.audio_converter.convert_to_mp3", return_value=mp3),
+        patch(
+            "src.stt.transcriber.transcribe",
+            side_effect=RuntimeError("disk full"),
+        ),
+        patch("src.stt.transcriber.safe_unload"),
+    ):
         result = _run(
             run_pipeline(
                 mp4,
@@ -108,13 +100,14 @@ def test_summarize_failure_sets_success_false(tmp_path):
     txt = tmp_path / "lecture.txt"
     txt.write_text("강의 본문 텍스트입니다 충분히 긴 내용.", encoding="utf-8")
 
-    with patch(
-        "src.converter.audio_converter.convert_to_mp3", return_value=mp3
-    ), patch(
-        "src.stt.transcriber.transcribe", return_value=txt
-    ), patch("src.stt.transcriber.safe_unload"), patch(
-        "src.summarizer.summarizer.summarize",
-        side_effect=RuntimeError("gemini API error"),
+    with (
+        patch("src.converter.audio_converter.convert_to_mp3", return_value=mp3),
+        patch("src.stt.transcriber.transcribe", return_value=txt),
+        patch("src.stt.transcriber.safe_unload"),
+        patch(
+            "src.summarizer.summarizer.summarize",
+            side_effect=RuntimeError("gemini API error"),
+        ),
     ):
         result = _run(
             run_pipeline(
@@ -146,15 +139,15 @@ def test_notify_failure_sets_success_false(tmp_path):
     summary = tmp_path / "lecture_summarized.txt"
     summary.write_text("요약 결과", encoding="utf-8")
 
-    with patch(
-        "src.converter.audio_converter.convert_to_mp3", return_value=mp3
-    ), patch(
-        "src.stt.transcriber.transcribe", return_value=txt
-    ), patch("src.stt.transcriber.safe_unload"), patch(
-        "src.summarizer.summarizer.summarize", return_value=summary
-    ), patch(
-        "src.notifier.telegram_notifier.notify_summary_complete",
-        return_value=False,
+    with (
+        patch("src.converter.audio_converter.convert_to_mp3", return_value=mp3),
+        patch("src.stt.transcriber.transcribe", return_value=txt),
+        patch("src.stt.transcriber.safe_unload"),
+        patch("src.summarizer.summarizer.summarize", return_value=summary),
+        patch(
+            "src.notifier.telegram_notifier.notify_summary_complete",
+            return_value=False,
+        ),
     ):
         result = _run(
             run_pipeline(
@@ -186,11 +179,11 @@ def test_transcript_empty_keeps_success_true(tmp_path):
     # 무음 — is_transcript_usable 가 False 를 반환할 만큼 짧은 내용.
     txt.write_text("  \n", encoding="utf-8")
 
-    with patch(
-        "src.converter.audio_converter.convert_to_mp3", return_value=mp3
-    ), patch(
-        "src.stt.transcriber.transcribe", return_value=txt
-    ), patch("src.stt.transcriber.safe_unload"):
+    with (
+        patch("src.converter.audio_converter.convert_to_mp3", return_value=mp3),
+        patch("src.stt.transcriber.transcribe", return_value=txt),
+        patch("src.stt.transcriber.safe_unload"),
+    ):
         result = _run(
             run_pipeline(
                 mp4,
@@ -220,15 +213,15 @@ def test_full_success_invariant(tmp_path):
     summary = tmp_path / "lecture_summarized.txt"
     summary.write_text("요약 결과", encoding="utf-8")
 
-    with patch(
-        "src.converter.audio_converter.convert_to_mp3", return_value=mp3
-    ), patch(
-        "src.stt.transcriber.transcribe", return_value=txt
-    ), patch("src.stt.transcriber.safe_unload"), patch(
-        "src.summarizer.summarizer.summarize", return_value=summary
-    ), patch(
-        "src.notifier.telegram_notifier.notify_summary_complete",
-        return_value=True,
+    with (
+        patch("src.converter.audio_converter.convert_to_mp3", return_value=mp3),
+        patch("src.stt.transcriber.transcribe", return_value=txt),
+        patch("src.stt.transcriber.safe_unload"),
+        patch("src.summarizer.summarizer.summarize", return_value=summary),
+        patch(
+            "src.notifier.telegram_notifier.notify_summary_complete",
+            return_value=True,
+        ),
     ):
         result = _run(
             run_pipeline(

@@ -82,9 +82,7 @@ def test_verify_bot_sendmessage_5xx_returns_telegram_api_error():
     getme_ok = _resp(200, {"ok": True, "result": {"username": "study_helper_bot"}})
     send_5xx = _resp(503)
 
-    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(
-        telegram_notifier.time, "sleep"
-    ):
+    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(telegram_notifier.time, "sleep"):
         mock_requests.get.return_value = getme_ok
         mock_requests.post.return_value = send_5xx
         # _send_message_verify 의 `except requests.exceptions.RequestException` 가
@@ -94,9 +92,7 @@ def test_verify_bot_sendmessage_5xx_returns_telegram_api_error():
         ok, error = telegram_notifier.verify_bot(_VALID_TOKEN, "98765")
 
         assert ok is False
-        assert error == "TELEGRAM_API_ERROR", (
-            f"5xx 가 잘못 분류됨 (API-F4 회귀): {error}"
-        )
+        assert error == "TELEGRAM_API_ERROR", f"5xx 가 잘못 분류됨 (API-F4 회귀): {error}"
         # 핵심: 5xx 를 INVALID_CHAT_ID 로 오분류하면 안 된다.
         assert error != "INVALID_CHAT_ID"
 
@@ -112,9 +108,7 @@ def test_verify_bot_sendmessage_4xx_returns_invalid_chat_id():
     getme_ok = _resp(200, {"ok": True, "result": {"username": "study_helper_bot"}})
     send_4xx = _resp(400)
 
-    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(
-        telegram_notifier.time, "sleep"
-    ):
+    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(telegram_notifier.time, "sleep"):
         mock_requests.get.return_value = getme_ok
         mock_requests.post.return_value = send_4xx
         mock_requests.exceptions = _real_requests.exceptions
@@ -134,13 +128,9 @@ def test_verify_bot_getme_network_error_returns_network_error():
     """API-F4: getMe 단계의 네트워크 예외 → NETWORK_ERROR."""
     from src.notifier import telegram_notifier
 
-    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(
-        telegram_notifier.time, "sleep"
-    ):
+    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(telegram_notifier.time, "sleep"):
         mock_requests.exceptions = _real_requests.exceptions
-        mock_requests.get.side_effect = _real_requests.exceptions.ConnectionError(
-            "연결 실패"
-        )
+        mock_requests.get.side_effect = _real_requests.exceptions.ConnectionError("연결 실패")
 
         ok, error = telegram_notifier.verify_bot(_VALID_TOKEN, "98765")
 
@@ -158,14 +148,10 @@ def test_verify_bot_sendmessage_network_error_returns_network_error():
 
     getme_ok = _resp(200, {"ok": True, "result": {"username": "study_helper_bot"}})
 
-    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(
-        telegram_notifier.time, "sleep"
-    ):
+    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(telegram_notifier.time, "sleep"):
         mock_requests.exceptions = _real_requests.exceptions
         mock_requests.get.return_value = getme_ok
-        mock_requests.post.side_effect = _real_requests.exceptions.ConnectionError(
-            "타임아웃"
-        )
+        mock_requests.post.side_effect = _real_requests.exceptions.ConnectionError("타임아웃")
 
         ok, error = telegram_notifier.verify_bot(_VALID_TOKEN, "98765")
 
@@ -218,9 +204,7 @@ def test_verify_bot_success_path():
     getme_ok = _resp(200, {"ok": True, "result": {"username": "study_helper_bot"}})
     send_ok = _resp(200, {"ok": True})
 
-    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(
-        telegram_notifier.time, "sleep"
-    ):
+    with patch.object(telegram_notifier, "requests") as mock_requests, patch.object(telegram_notifier.time, "sleep"):
         mock_requests.get.return_value = getme_ok
         mock_requests.post.return_value = send_ok
         mock_requests.exceptions = _real_requests.exceptions

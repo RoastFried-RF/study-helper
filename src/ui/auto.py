@@ -85,7 +85,7 @@ _BROWSER_RESTART_INTERVAL = _RetryPolicy.BROWSER_RESTART_INTERVAL
 _is_browser_dead_exception = is_browser_dead_exception
 
 
-async def _restart_browser_with_retry(scraper: "CourseScraper", max_retries: int = 3) -> bool:
+async def _restart_browser_with_retry(scraper: CourseScraper, max_retries: int = 3) -> bool:
     """브라우저를 close() 후 start()로 재시작한다. 실패 시 지수 백오프 재시도.
 
     Returns:
@@ -117,7 +117,7 @@ async def _restart_browser_with_retry(scraper: "CourseScraper", max_retries: int
 
 
 async def _recover_if_browser_dead(
-    scraper: "CourseScraper",
+    scraper: CourseScraper,
     exc: BaseException,
     context_msg: str,
 ) -> bool:
@@ -201,9 +201,9 @@ def _configure_schedule() -> list[int]:
 
 
 async def run_auto_mode(
-    scraper: "CourseScraper",
-    courses: list["Course"],
-    details: list["CourseDetail | None"],
+    scraper: CourseScraper,
+    courses: list[Course],
+    details: list[CourseDetail | None],
 ) -> None:
     """
     자동 모드 진입점.
@@ -274,9 +274,7 @@ async def run_auto_mode(
                 except Exception:
                     line = ""
                 # 이미 cancel 된 future 면 set 하지 않는다.
-                loop.call_soon_threadsafe(
-                    lambda: target.set_result(line) if not target.done() else None
-                )
+                loop.call_soon_threadsafe(lambda: target.set_result(line) if not target.done() else None)
 
             threading.Thread(target=_read_one, daemon=True, name="stdin-read").start()
             line = await fut  # task cancel 시 CancelledError 로 즉시 탈출
@@ -376,15 +374,16 @@ async def run_auto_mode(
                     # 노출이라 _log.debug 로 격하. 변경 사실(개수)은 _log.info 로 분리.
                     _log.info(
                         "과목 목록 변경 감지 — 추가 %d건 / 제거 %d건",
-                        len(added), len(removed),
+                        len(added),
+                        len(removed),
                     )
                     _log.debug(
-                        "과목 목록 변경 상세 — 추가:%s 제거:%s", added or "{}", removed or "{}",
+                        "과목 목록 변경 상세 — 추가:%s 제거:%s",
+                        added or "{}",
+                        removed or "{}",
                     )
                     if added or removed:
-                        console.print(
-                            f"  [dim]과목 목록 변경 — 추가 {len(added)} / 제거 {len(removed)}[/dim]"
-                        )
+                        console.print(f"  [dim]과목 목록 변경 — 추가 {len(added)} / 제거 {len(removed)}[/dim]")
                     courses[:] = fresh_courses  # in-place mutation — 호출자 reference 보존
             except Exception as e:
                 _log.warning("과목 목록 갱신 실패 (이전 목록 유지): %s", e)
@@ -411,9 +410,7 @@ async def run_auto_mode(
                     None,
                     # 기본인자로 loop 변수를 즉시 바인딩 (B023) — 사실상 즉시 await 라
                     # stale 위험은 없으나 명시적으로 캡처.
-                    lambda c=courses, d=details, t=tg: check_and_notify_deadlines(
-                        c, d, token=t[0], chat_id=t[1]
-                    ),
+                    lambda c=courses, d=details, t=tg: check_and_notify_deadlines(c, d, token=t[0], chat_id=t[1]),
                 )
                 if dl_count > 0:
                     console.print(f"  [yellow]마감 임박 항목 {dl_count}건 — 텔레그램 알림 전송[/yellow]")
@@ -489,7 +486,9 @@ async def run_auto_mode(
             if none_detail_count > 0 or courses_dropped > 0:
                 _log.warning(
                     "fetch 부분 실패 (courses 누락 %d / details None %d/%d) — retain_only 보류",
-                    courses_dropped, none_detail_count, len(details),
+                    courses_dropped,
+                    none_detail_count,
+                    len(details),
                 )
                 orphan_count = 0
             else:
@@ -537,7 +536,8 @@ async def run_auto_mode(
                         cycle_quarantined += 1
                         _log.warning(
                             "강의 격리: 누적 재생 실패 임계 초과 — [%s] %s",
-                            course.long_name, lec.title,
+                            course.long_name,
+                            lec.title,
                         )
                         await _tg_quarantine_notify(course, lec)
 
@@ -571,9 +571,7 @@ async def run_auto_mode(
             _save_store(store)
             missing_entries = _list_missing_entries(courses, details)
             # M5: _notify_download_gaps 는 telegram sendMessage(blocking) — executor 위임
-            await asyncio.get_running_loop().run_in_executor(
-                None, _notify_download_gaps, missing_entries
-            )
+            await asyncio.get_running_loop().run_in_executor(None, _notify_download_gaps, missing_entries)
 
             # STT 모델 메모리 해제 (다음 사이클까지 필요 없음)
             from src.stt.transcriber import safe_unload
@@ -585,10 +583,15 @@ async def run_auto_mode(
             _log.info(
                 "스케줄 체크 종료 (cycle %d, %.1fs): full_done=%d full_fail=%d "
                 "browser_aborted=%d dl_done=%d dl_fail=%d quarantined=%d missing=%d",
-                cycle_count, cycle_elapsed,
-                cycle_full_done, cycle_full_failed, cycle_browser_aborted,
-                cycle_dl_done, cycle_dl_failed,
-                cycle_quarantined, len(missing_entries),
+                cycle_count,
+                cycle_elapsed,
+                cycle_full_done,
+                cycle_full_failed,
+                cycle_browser_aborted,
+                cycle_dl_done,
+                cycle_dl_failed,
+                cycle_quarantined,
+                len(missing_entries),
             )
 
             console.print()
@@ -621,9 +624,9 @@ async def run_auto_mode(
 
 
 async def _process_lecture(
-    scraper: "CourseScraper",
-    course: "Course",
-    lec: "LectureItem",
+    scraper: CourseScraper,
+    course: Course,
+    lec: LectureItem,
     stop_event: asyncio.Event,
 ) -> PlayResult:
     """
@@ -714,9 +717,9 @@ async def _process_lecture(
 
 
 async def _process_download_only(
-    scraper: "CourseScraper",
-    course: "Course",
-    lec: "LectureItem",
+    scraper: CourseScraper,
+    course: Course,
+    lec: LectureItem,
 ) -> PlayResult:
     """재생 스킵, 다운로드만 재시도하는 fast-path.
 
@@ -745,9 +748,9 @@ _MAX_DOWNLOAD_RETRIES = _RetryPolicy.DOWNLOAD
 
 
 async def _run_download_step(
-    scraper: "CourseScraper",
-    course: "Course",
-    lec: "LectureItem",
+    scraper: CourseScraper,
+    course: Course,
+    lec: LectureItem,
     label: str,
 ) -> DownloadStepResult:
     """`run_download`를 최대 3회 시도하고 결과를 `DownloadStepResult`로 반환한다.
@@ -788,7 +791,12 @@ async def _run_download_step(
             last_exc_type = exc_type
             last_reason = f"exception:{exc_type}"
             _log.error(
-                "다운로드 예외 (%d/%d): %s — %s", attempt, _MAX_DOWNLOAD_RETRIES, label, e, exc_info=True,
+                "다운로드 예외 (%d/%d): %s — %s",
+                attempt,
+                _MAX_DOWNLOAD_RETRIES,
+                label,
+                e,
+                exc_info=True,
             )
             console.print(f"  [red]  → 다운로드 실패: {exc_type} ({attempt}/{_MAX_DOWNLOAD_RETRIES})[/red]")
             # BUG-6: 브라우저 죽음 감지 시 재시작 후 같은 강의 retry 하지 않고
@@ -796,7 +804,9 @@ async def _run_download_step(
             if await _recover_if_browser_dead(scraper, e, label):
                 _log.info("브라우저 재시작으로 인해 다운로드 abort: %s", label)
                 return DownloadStepResult(
-                    ok=False, reason=REASON_BROWSER_RESTARTED, downloadable=True,
+                    ok=False,
+                    reason=REASON_BROWSER_RESTARTED,
+                    downloadable=True,
                 )
             continue
 
@@ -816,7 +826,11 @@ async def _run_download_step(
 
         last_reason = result.reason
         _log.warning(
-            "다운로드 실패 (%d/%d): %s — reason=%s", attempt, _MAX_DOWNLOAD_RETRIES, label, result.reason,
+            "다운로드 실패 (%d/%d): %s — reason=%s",
+            attempt,
+            _MAX_DOWNLOAD_RETRIES,
+            label,
+            result.reason,
         )
         console.print(
             f"  [yellow]  → 다운로드 실패: {label} (사유={result.reason}, {attempt}/{_MAX_DOWNLOAD_RETRIES})[/yellow]"
@@ -870,29 +884,32 @@ _MissingTuple = tuple[str, str, str, str]  # (course_long_name, week_label, titl
 
 
 def _reconcile_store_with_filesystem(
-    courses: list["Course"],
-    details: list["CourseDetail | None"],
+    courses: list[Course],
+    details: list[CourseDetail | None],
     store: ProgressStore,
 ) -> None:
     """파일시스템 관찰 결과를 store에 반영한다 (Command)."""
     from src.service.download_state import reconcile_store_with_filesystem
 
     reconcile_store_with_filesystem(
-        courses, details, store,
+        courses,
+        details,
+        store,
         download_dir=Config.get_download_dir(),
         rule=Config.DOWNLOAD_RULE or "both",
     )
 
 
 def _list_missing_entries(
-    courses: list["Course"],
-    details: list["CourseDetail | None"],
+    courses: list[Course],
+    details: list[CourseDetail | None],
 ) -> list[_MissingTuple]:
     """시청 완료된 강의 중 파일이 누락된 항목 튜플 목록을 반환한다 (Query, 부수효과 없음)."""
     from src.service.download_state import list_missing_items
 
     items = list_missing_items(
-        courses, details,
+        courses,
+        details,
         download_dir=Config.get_download_dir(),
         rule=Config.DOWNLOAD_RULE or "both",
     )
@@ -920,7 +937,7 @@ def _notify_download_gaps(missing: list[_MissingTuple]) -> None:
     dispatch_if_configured(notify_download_gaps, missing=missing)
 
 
-async def _tg_error_notify(course: "Course", lec: "LectureItem", error_msg: str) -> None:
+async def _tg_error_notify(course: Course, lec: LectureItem, error_msg: str) -> None:
     """자동 모드 처리 오류를 텔레그램으로 알린다.
 
     M5: telegram HTTP(requests + backoff sleep)는 blocking 이므로 run_in_executor
@@ -941,13 +958,14 @@ async def _tg_error_notify(course: "Course", lec: "LectureItem", error_msg: str)
     )
 
 
-async def _tg_quarantine_notify(course: "Course", lec: "LectureItem") -> None:
+async def _tg_quarantine_notify(course: Course, lec: LectureItem) -> None:
     """BUG-5: 누적 재생 실패 임계 초과로 강의가 격리됐음을 알린다.
 
     notify_auto_error 를 재사용 — 별도 알림 함수를 추가하지 않아 의존성을
     최소화한다. 사용자 화면에는 격리 사실 + 강의 정보만 전달.
     """
     await _tg_error_notify(
-        course, lec,
+        course,
+        lec,
         "누적 재생 실패 임계 초과 — 자동 모드에서 격리되었습니다. LMS 측 강의 상태를 확인해 주세요.",
     )

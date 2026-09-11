@@ -174,9 +174,7 @@ def test_save_env_value_with_newline_round_trips(tmp_path):
     from dotenv import dotenv_values
 
     loaded = dotenv_values(env_path)
-    assert loaded["SUMMARY_PROMPT_EXTRA"] == multiline, (
-        f".env round-trip 손상: {loaded.get('SUMMARY_PROMPT_EXTRA')!r}"
-    )
+    assert loaded["SUMMARY_PROMPT_EXTRA"] == multiline, f".env round-trip 손상: {loaded.get('SUMMARY_PROMPT_EXTRA')!r}"
 
 
 def test_save_env_newline_value_does_not_corrupt_other_keys(tmp_path):
@@ -196,9 +194,7 @@ def test_save_env_newline_value_does_not_corrupt_other_keys(tmp_path):
     # SUMMARY_PROMPT_EXTRA 는 통째로 보존.
     assert loaded["SUMMARY_PROMPT_EXTRA"] == malicious
     # value 안의 'DOWNLOAD_RULE=video' 가 진짜 키를 덮어쓰면 안 된다.
-    assert loaded["DOWNLOAD_RULE"] == "audio", (
-        "newline value 안의 KEY=value 패턴이 별도 키로 주입됨"
-    )
+    assert loaded["DOWNLOAD_RULE"] == "audio", "newline value 안의 KEY=value 패턴이 별도 키로 주입됨"
     # 마찬가지로 TELEGRAM_ENABLED 가 잘못 삽입되면 안 됨.
     assert loaded.get("TELEGRAM_ENABLED") != "true"
 
