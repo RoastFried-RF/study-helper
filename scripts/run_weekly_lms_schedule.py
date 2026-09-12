@@ -7,7 +7,7 @@ Windows Task Scheduler(`SSU_LMS_Schedule_Weekly`) 가 매주 화요일 09:00 에
 동작:
 1. **미시청 강의 실제 재생(출석 처리)** — 기존 자동 모드의 재생 엔진(`run_player`,
    Plan A 실재생 → Plan B 진도 API 폴백)을 그대로 재사용해 needs_watch 영상을 순차
-   시청한다. 재생 시도 후 `run_download` 로 호스트에서 다운로드→음성 변환→STT→
+   시청한다. 재생 성공 후 `run_download` 로 호스트에서 다운로드→음성 변환→STT→
    AI 요약→텔레그램 요약 발송을 설정에 따라 수행한다(ffmpeg/whisper 필요).
    `--no-download` 로 다운로드 이후 단계를 생략하고, `--no-watch` 로 전체를 생략한다.
    이전 주를 포함해 재생했으나 다운로드하지 못한 강의는 재생 없이 재시도한다.
@@ -20,9 +20,10 @@ Windows Task Scheduler(`SSU_LMS_Schedule_Weekly`) 가 매주 화요일 09:00 에
    않는다(검증 주체가 별도 필요 + OAuth 토큰 미보유 전제).
 4. 산출 JSON 2종(export/candidates)을 로그 디렉토리에 보존하고 30일 초과분은 정리.
 5. 시청 결과 + 후보 요약을 텔레그램 다이제스트로 전송(`dispatch_if_configured`).
+   `--no-telegram`은 주간 다이제스트만 생략하며 강의별 요약·오류 알림은 전송된다.
 
 종료 코드: 0 정상 / 1 실패 (Task Scheduler '마지막 실행 결과' 로 식별).
-시청 단계 실패는 일정 수집을 막지 않는다 — 다이제스트 오류 항목으로 보고된다.
+시청 단계 전체 실패는 일정 수집을 계속하고 다이제스트 오류 항목으로 보고한 뒤 exit 1로 종료한다.
 """
 
 from __future__ import annotations
@@ -48,6 +49,9 @@ _log = get_logger("run_weekly_lms_schedule")
 
 # export 서브프로세스 상한 — 과목 수가 늘어도 무인 실행이 무한 대기하지 않게 한다.
 _EXPORT_TIMEOUT_SEC = 20 * 60
+
+# 강의당 다운로드·STT 대기 상한 — 한 강의에서 러너 진행이 무기한 멈추지 않게 한다.
+_DOWNLOAD_TIMEOUT_SEC = 30 * 60
 
 # 산출 JSON 보존 기간 — 초과분은 다음 실행에서 정리한다.
 _RETENTION_DAYS = 30
@@ -155,7 +159,12 @@ async def _watch_pending_videos(limit: int | None, no_download: bool = False) ->
             try:
                 from src.ui.download import run_download
 
-                dl = await run_download(scraper.page, lec, course, audio_only=rule == "audio", both=rule == "both")
+                # wait_for는 코루틴 대기만 취소한다. executor의 ffmpeg/whisper 스레드는
+                # 즉시 종료되지 않아 고아 스레드가 남을 수 있으나, 러너는 다음 강의로 진행한다.
+                dl = await asyncio.wait_for(
+                    run_download(scraper.page, lec, course, audio_only=rule == "audio", both=rule == "both"),
+                    timeout=_DOWNLOAD_TIMEOUT_SEC,
+                )
                 if dl.ok:
                     store.mark_download_success(lec.full_url)
                     stats["downloaded"] += 1
@@ -216,7 +225,7 @@ async def _watch_pending_videos(limit: int | None, no_download: bool = False) ->
             except Exception as e:
                 _log.warning("auto_progress.json 저장 실패: %s", e)
 
-            if not browser_died and not no_download:
+            if played and not browser_died and not no_download:
                 await _download(course, lec, label)
 
         # 재생 제한과 별개로 전 주를 포함한 다운로드 누락을 처리한다.
@@ -235,6 +244,9 @@ async def _watch_pending_videos(limit: int | None, no_download: bool = False) ->
                     store.mark_download_confirmed_from_filesystem(lec.full_url)
                 elif await _download(course, lec, label):
                     stats["dl_retry_downloaded"] += 1
+                elif scraper.page is None or scraper.page.is_closed():
+                    _log.warning("브라우저 종료로 다운로드 재시도 중단: %s — 다음 정기 실행에서 재시도", label)
+                    break
                 try:
                     store.maybe_flush()
                 except Exception as e:
@@ -246,8 +258,11 @@ async def _watch_pending_videos(limit: int | None, no_download: bool = False) ->
             _log.warning("auto_progress.json 최종 저장 실패: %s", e)
         _log.info(
             "다운로드 단계 완료: 성공 %d · 요약 %d · 실패 %d · 재시도 대상 %d · 재시도 성공 %d",
-            stats["downloaded"], stats["summarized"], stats["download_failed"],
-            stats["dl_retry_total"], stats["dl_retry_downloaded"],
+            stats["downloaded"],
+            stats["summarized"],
+            stats["download_failed"],
+            stats["dl_retry_total"],
+            stats["dl_retry_downloaded"],
         )
         return stats
     finally:
@@ -344,7 +359,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="주간 LMS 무인 러너 (미시청 강의 재생 → export → dry-run 캘린더화 → 텔레그램)"
     )
-    parser.add_argument("--no-telegram", action="store_true", help="텔레그램 전송 생략(수동 점검용)")
+    parser.add_argument(
+        "--no-telegram", action="store_true", help="주간 다이제스트 전송 생략(강의별 요약·오류 알림은 전송됨)"
+    )
     parser.add_argument("--no-watch", action="store_true", help="강의 재생(출석) 단계 생략")
     parser.add_argument("--no-download", action="store_true", help="다운로드/STT/요약 단계 생략(수동 점검용)")
     parser.add_argument("--watch-limit", type=int, default=None, help="이번 실행에서 재생할 강의 수 상한(수동 점검용)")
@@ -418,6 +435,8 @@ def main(argv: list[str] | None = None) -> int:
             stats.get("skipped", 0),
         )
         _notify(args.no_telegram, stats, create_top, review_top, export_errors)
+        if watch_errors:
+            return 1
         return 0
     except Exception as e:
         # 무인 실행 — 어떤 예외도 exit 1 + 로그로 수렴시키고, 침묵 실패가 되지 않도록

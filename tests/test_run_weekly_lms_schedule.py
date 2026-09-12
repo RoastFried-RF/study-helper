@@ -26,7 +26,7 @@ def watch_env(monkeypatch, tmp_path):
         for i in range(2)
     ]
     scraper = SimpleNamespace(
-        page=object(),
+        page=SimpleNamespace(is_closed=MagicMock(return_value=False)),
         start=AsyncMock(),
         close=AsyncMock(),
         ensure_session=AsyncMock(),
@@ -177,17 +177,28 @@ async def test_browser_death_skips_download_only_for_affected_lecture(watch_env)
 
 
 @pytest.mark.parametrize("play_result", [(False, True), RuntimeError("재생 실패")])
-async def test_exhausted_play_retries_still_download_once(watch_env, play_result):
+async def test_exhausted_play_retries_skip_download_and_preserve_quarantine(watch_env, play_result):
     env = watch_env
     env.play.side_effect = [play_result, play_result]
-    env.store.mark_play_failed.return_value = True
+    entry = SimpleNamespace(reason="")
+
+    def quarantine(url):
+        entry.reason = REASON_PLAY_QUARANTINED
+        return True
+
+    env.store.mark_play_failed.side_effect = quarantine
 
     stats = await runner._watch_pending_videos(1)
 
     assert env.play.await_count == 2
-    env.dl.assert_awaited_once_with(env.scraper.page, env.lectures[0], env.courses[0], audio_only=False, both=True)
+    env.dl.assert_not_awaited()
+    env.store.mark_play_failed.assert_called_once_with(env.lectures[0].full_url)
+    env.store.mark_download_success.assert_not_called()
+    env.store.mark_download_failed.assert_not_called()
+    assert entry.reason == REASON_PLAY_QUARANTINED
     assert stats["watched"] == 0
-    assert stats["watch_failed"] == stats["watch_quarantined"] == stats["downloaded"] == 1
+    assert stats["watch_failed"] == stats["watch_quarantined"] == 1
+    assert stats["downloaded"] == stats["download_failed"] == 0
 
 
 @pytest.mark.parametrize("skip", ["completed", "absent", "quarantined"])
@@ -266,7 +277,7 @@ async def test_backlog_failure_recorded_and_next_download_continues(watch_env, f
         lec.needs_watch = False
     env.store.needs_download_retry.return_value = True
     env.dl.side_effect = [failure, DownloadResult(ok=True)]
-    recovered_page = object()
+    recovered_page = SimpleNamespace(is_closed=MagicMock(return_value=False))
 
     async def recover(scraper, exc, label):
         scraper.page = recovered_page
@@ -304,6 +315,69 @@ async def test_no_download_skips_both_phases_with_backlog(watch_env):
     env.store.mark_download_failed.assert_not_called()
     env.store.mark_download_confirmed_from_filesystem.assert_not_called()
     assert stats["dl_retry_total"] == stats["downloaded"] == stats["download_failed"] == 0
+
+
+@pytest.mark.parametrize("backlog", [False, True])
+async def test_download_timeout_records_failure_and_continues(watch_env, monkeypatch, backlog):
+    env = watch_env
+    if backlog:
+        for lec in env.lectures:
+            lec.needs_watch = False
+        env.store.needs_download_retry.return_value = True
+    cancelled = runner.asyncio.Event()
+
+    async def download(page, lec, course, **kwargs):
+        if lec is env.lectures[0]:
+            try:
+                await runner.asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        return DownloadResult(ok=True)
+
+    env.dl.side_effect = download
+    monkeypatch.setattr(runner, "_DOWNLOAD_TIMEOUT_SEC", 0.01)
+
+    stats = await runner._watch_pending_videos(None)
+
+    assert cancelled.is_set()
+    assert env.dl.await_count == 2
+    assert env.dl.await_args_list[1].args[1] is env.lectures[1]
+    assert stats["download_failed"] == stats["downloaded"] == 1
+    env.store.mark_download_failed.assert_called_once_with(env.lectures[0].full_url, "TimeoutError")
+    env.store.mark_download_success.assert_called_once_with(env.lectures[1].full_url)
+    env.scraper.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("missing_page", [False, True])
+async def test_backlog_failed_result_with_dead_page_stops_loop(watch_env, missing_page):
+    env = watch_env
+    for lec in env.lectures:
+        lec.needs_watch = False
+    env.store.needs_download_retry.return_value = True
+
+    async def download(*args, **kwargs):
+        if missing_page:
+            env.scraper.page = None
+        else:
+            env.scraper.page.is_closed.return_value = True
+        return DownloadResult(ok=False, reason="url_extract_failed")
+
+    env.dl.side_effect = download
+
+    stats = await runner._watch_pending_videos(None)
+
+    env.dl.assert_awaited_once()
+    assert env.dl.await_args.args[1] is env.lectures[0]
+    env.play.assert_not_awaited()
+    env.recover.assert_not_awaited()
+    env.store.mark_download_failed.assert_called_once_with(env.lectures[0].full_url, "url_extract_failed")
+    env.store.mark_download_success.assert_not_called()
+    env.store.flush.assert_called_once()
+    env.scraper.close.assert_awaited_once()
+    assert stats["dl_retry_total"] == 2
+    assert stats["download_failed"] == 1
+    assert stats["downloaded"] == stats["dl_retry_downloaded"] == 0
+    assert "브라우저 종료" in runner._log.warning.call_args.args[0]
 
 
 async def test_backlog_runs_after_play_browser_death(watch_env):
@@ -378,3 +452,37 @@ def test_main_passes_download_flag_and_preserves_stats(monkeypatch, tmp_path, fl
     else:
         watch.assert_awaited_once_with(1, no_download="--no-download" in flags)
         assert notify.call_args.args[1]["summarized"] == 1
+
+
+@pytest.mark.parametrize(
+    ("watch_result", "expected_exit"),
+    [(RuntimeError("시청 실패"), 1), ({"download_failed": 0}, 0), ({"download_failed": 1}, 0)],
+)
+def test_main_watch_stage_failure_exit_after_digest(monkeypatch, watch_result, expected_exit):
+    watch = AsyncMock()
+    if isinstance(watch_result, Exception):
+        watch.side_effect = watch_result
+    else:
+        watch.return_value = watch_result
+    export = MagicMock(return_value=(0, {"ok": True, "items": []}, ""))
+    notify = MagicMock()
+    artifacts = MagicMock()
+    monkeypatch.setattr(runner, "_watch_pending_videos", watch)
+    monkeypatch.setattr(runner, "_run_export", export)
+    monkeypatch.setattr(runner, "_write_artifacts", artifacts)
+    monkeypatch.setattr(runner, "_cleanup_artifacts", MagicMock())
+    monkeypatch.setattr(runner, "_notify", notify)
+    monkeypatch.setattr(runner, "_log", MagicMock())
+
+    assert runner.main([]) == expected_exit
+
+    watch.assert_awaited_once_with(None, no_download=False)
+    export.assert_called_once_with()
+    artifacts.assert_called_once()
+    notify.assert_called_once()
+    assert notify.call_args.args[0] is False
+    if expected_exit:
+        assert notify.call_args.args[4] == ["시청 단계 실패: RuntimeError"]
+    else:
+        assert notify.call_args.args[4] == []
+        assert notify.call_args.args[1]["download_failed"] == watch_result["download_failed"]
