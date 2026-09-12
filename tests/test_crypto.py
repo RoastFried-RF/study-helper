@@ -1,6 +1,10 @@
 """crypto.py 단위 테스트."""
 
-from unittest.mock import patch
+from contextlib import contextmanager
+from unittest.mock import Mock, patch
+
+import pytest
+from cryptography.fernet import Fernet
 
 
 def _patch_key_path(key_file):
@@ -249,3 +253,148 @@ def test_secret_key_double_check_adopts_existing(tmp_path):
     assert key == existing_key
     assert key_file.read_bytes().strip() == existing_key
     crypto._cached_fernet = None
+
+
+@pytest.mark.parametrize("already_exists", [False, True])
+def test_keyring_only_receives_canonical_file_key_under_lock(tmp_path, monkeypatch, already_exists):
+    """락 대기 중 나타난 키와 기존 키 모두 후보 공개 없이 채택·복호화한다."""
+    from src import crypto
+    from src.util import atomic_write
+
+    key_file = tmp_path / ".secret_key"
+    existing = Fernet.generate_key()
+    encrypted = "enc:" + Fernet(existing).encrypt(b"existing-credentials").decode()
+    if already_exists:
+        key_file.write_bytes(existing)
+    locked = False
+    published = []
+
+    @contextmanager
+    def lock(path):
+        nonlocal locked
+        assert path == key_file
+        assert published == []
+        locked = True
+        if not already_exists:
+            key_file.write_bytes(existing)
+        try:
+            yield
+        finally:
+            locked = False
+
+    def save(key):
+        assert locked
+        assert key == existing == key_file.read_bytes()
+        published.append(key)
+        return True
+
+    monkeypatch.setattr(crypto, "_key_path", lambda: key_file)
+    monkeypatch.setattr(crypto, "_cached_fernet", None)
+    monkeypatch.setattr(crypto, "_try_keyring_load", lambda: None)
+    monkeypatch.setattr(crypto, "_try_keyring_save", save)
+    monkeypatch.setattr(atomic_write, "file_lock", lock)
+    assert crypto.decrypt(encrypted) == "existing-credentials"
+    assert published == [existing]
+
+
+@pytest.mark.parametrize(("file_saved", "keyring_saved"), [(False, False), (False, True), (True, False), (True, True)])
+def test_new_key_requires_at_least_one_persistent_store(tmp_path, monkeypatch, file_saved, keyring_saved):
+    """두 저장소 실패는 캐시 없이 예외, 한 곳 이상 성공하면 재시작 후에도 복호화한다."""
+    from src import crypto
+    from src.util import atomic_write
+
+    key_file = tmp_path / ".secret_key"
+    locked = False
+    stored_key = None
+    real_write = atomic_write.atomic_write_text
+
+    @contextmanager
+    def lock(path):
+        nonlocal locked
+        assert path == key_file
+        locked = True
+        try:
+            yield
+        finally:
+            locked = False
+
+    def write(path, text, **kwargs):
+        assert locked
+        if not file_saved:
+            raise PermissionError("synthetic file write denial")
+        real_write(path, text, **kwargs)
+
+    def save(key):
+        nonlocal stored_key
+        assert locked
+        if file_saved:
+            assert key_file.read_bytes() == key
+        if keyring_saved:
+            stored_key = key
+        return keyring_saved
+
+    monkeypatch.setattr(crypto, "_key_path", lambda: key_file)
+    monkeypatch.setattr(crypto, "_cached_fernet", None)
+    monkeypatch.setattr(crypto, "_try_keyring_load", lambda: stored_key)
+    monkeypatch.setattr(crypto, "_try_keyring_save", save)
+    monkeypatch.setattr(atomic_write, "file_lock", lock)
+    monkeypatch.setattr(atomic_write, "atomic_write_text", write)
+    if not file_saved and not keyring_saved:
+        with pytest.raises(OSError, match="암호화 키를 파일 또는 OS 키체인에 저장할 수 없습니다"):
+            crypto.encrypt("credentials")
+        assert crypto._cached_fernet is None
+        assert not key_file.exists()
+        return
+    encrypted = crypto.encrypt("credentials")
+    crypto._cached_fernet = None
+    assert crypto.decrypt(encrypted) == "credentials"
+
+
+def test_keyring_rechecked_after_lock_wait(tmp_path, monkeypatch):
+    """다른 프로세스가 keyring 에만 저장했으면 새 키로 덮어쓰지 않는다."""
+    from src import crypto
+
+    existing = Fernet.generate_key()
+    monkeypatch.setattr(crypto, "_key_path", lambda: tmp_path / ".secret_key")
+    monkeypatch.setattr(crypto, "_try_keyring_load", Mock(side_effect=[None, existing]))
+    save = Mock()
+    monkeypatch.setattr(crypto, "_try_keyring_save", save)
+    assert crypto._load_or_create_key() == existing
+    save.assert_not_called()
+
+
+def test_existing_key_still_loads_when_lock_file_unwritable(tmp_path, monkeypatch):
+    """이미 영속된 키의 읽기는 락 파일 생성 권한 실패에 영향받지 않는다."""
+    from src import crypto
+
+    existing = Fernet.generate_key()
+    key_file = tmp_path / ".secret_key"
+    key_file.write_bytes(existing)
+    monkeypatch.setattr(crypto, "_key_path", lambda: key_file)
+    monkeypatch.setattr(crypto, "_try_keyring_load", lambda: None)
+    save = Mock()
+    monkeypatch.setattr(crypto, "_try_keyring_save", save)
+    with patch("src.util.atomic_write.file_lock", side_effect=PermissionError("synthetic lock denial")):
+        assert crypto._load_or_create_key() == existing
+    save.assert_not_called()
+
+
+def test_existing_key_decrypts_during_atomic_write_import(tmp_path, monkeypatch):
+    """atomic_write 초기화 중 순환 import 가 발생해도 기존 자격증명을 복호화한다."""
+    import sys
+    from types import ModuleType
+
+    from src import crypto
+
+    existing = Fernet.generate_key()
+    key_file = tmp_path / ".secret_key"
+    key_file.write_bytes(existing)
+    encrypted = "enc:" + Fernet(existing).encrypt(b"existing-credentials").decode()
+    monkeypatch.setattr(crypto, "_key_path", lambda: key_file)
+    monkeypatch.setattr(crypto, "_cached_fernet", None)
+    monkeypatch.setattr(crypto, "_try_keyring_load", lambda: None)
+    save = Mock()
+    monkeypatch.setattr(crypto, "_try_keyring_save", save)
+    monkeypatch.setitem(sys.modules, "src.util.atomic_write", ModuleType("src.util.atomic_write"))
+    assert crypto.decrypt(encrypted) == "existing-credentials"
+    save.assert_not_called()

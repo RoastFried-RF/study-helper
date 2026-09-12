@@ -435,12 +435,8 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
         try:
             if not resp.ok:
                 # SEC-009: Telegram 응답 원문에 토큰 일부/요청 URL 이 포함될 수 있어
-                # 응답으로 노출하지 않는다. 상세는 서버 로그에만.
-                try:
-                    desc = resp.json().get("description", "")
-                except ValueError:
-                    desc = resp.text[:200]
-                _log.warning("Telegram getMe 실패 (%d): %s", resp.status_code, desc)
+                # 응답과 로그 모두 원문 대신 상태 코드만 기록한다.
+                _log.warning("Telegram getMe 실패 (%d)", resp.status_code)
                 if resp.status_code in (401, 404):
                     return False, "INVALID_TOKEN"
                 return False, "TELEGRAM_API_ERROR"
@@ -451,7 +447,7 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
         finally:
             resp.close()
     except Exception as e:
-        _log.warning("Telegram getMe 네트워크 오류: %s: %s", type(e).__name__, e)
+        _log.warning("Telegram getMe 네트워크 오류: %s", type(e).__name__)
         return False, "NETWORK_ERROR"
 
     # API-F4: 실패 사유를 4xx(INVALID_CHAT_ID)/5xx(TELEGRAM_API_ERROR)/network

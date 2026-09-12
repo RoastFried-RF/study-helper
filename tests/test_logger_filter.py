@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+from io import StringIO
 
-from src.logger import SensitiveFilter
+import pytest
+
+from src.logger import SanitizingFormatter, SensitiveFilter
 
 
 def _make_record(msg: str, args: tuple | dict | None = None) -> logging.LogRecord:
@@ -25,6 +28,66 @@ def test_filter_masks_plain_kv() -> None:
     f.filter(record)
     assert "foo@bar.com" not in record.msg
     assert "REDACTED" in record.msg
+
+
+@pytest.mark.parametrize(
+    ("message", "args"),
+    [
+        ("password=%s done=%d", ("synthetic-secret", 7)),
+        ("password=%(value)s done=%(count)d", ({"value": "synthetic-secret", "count": 7},)),
+        ("failure=%s done=7", (ValueError("token=synthetic-secret"),)),
+        ("payload=%s done=7", ({"password": "synthetic-secret", "safe": "keep"},)),
+    ],
+)
+def test_final_formatter_masks_interpolated_arguments(message, args):
+    """템플릿을 깨지 않고 예외 객체와 dict 를 포함한 최종 메시지를 마스킹한다."""
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(SensitiveFilter())
+    handler.setFormatter(SanitizingFormatter("%(message)s"))
+    handler.handle(_make_record(message, args))
+    output = stream.getvalue()
+    assert "synthetic-secret" not in output
+    assert "***REDACTED***" in output
+    assert "done=7" in output
+
+
+def test_final_formatter_masks_traceback_on_multiple_handlers():
+    """캐시된 exc_text 를 재사용하는 두 번째 handler 도 traceback 을 마스킹한다."""
+    streams = [StringIO(), StringIO()]
+    parent = logging.Logger("test_security")
+    child = logging.Logger("test_security.child")
+    child.parent = parent
+    for stream in streams:
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(SensitiveFilter())
+        handler.setFormatter(SanitizingFormatter("%(message)s"))
+        parent.addHandler(handler)
+    error_message = "request failed: token=" + "synthetic-traceback-secret"
+    try:
+        raise ValueError(error_message)
+    except ValueError:
+        child.error("password=%s", "synthetic-message-secret", exc_info=True)
+    for stream in streams:
+        output = stream.getvalue()
+        assert "synthetic-traceback-secret" not in output
+        assert "synthetic-message-secret" not in output
+        assert "***REDACTED***" in output
+        assert "Traceback" in output
+        assert "ValueError" in output
+
+
+def test_telegram_path_masking_and_count():
+    """봇 경로 토큰을 마스킹하고 유지보수 dry-run 집계에도 포함한다."""
+    from src.util.log_sanitize import count_sensitive, mask_sensitive
+
+    token = "123456789:" + "A" * 35
+    text = f"https://api.telegram.org/bot{token}/getMe"
+    masked = mask_sensitive(text)
+    assert token not in masked
+    assert masked.endswith("/bot***REDACTED***/getMe")
+    assert count_sensitive(text) == 1
+    assert mask_sensitive(masked) == masked
 
 
 def test_filter_masks_urlencoded_kv() -> None:
