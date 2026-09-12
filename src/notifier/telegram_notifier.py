@@ -296,10 +296,13 @@ def format_weekly_lms_digest(
             f"강의 시청 {stats.get('watched', 0)}/{stats.get('watch_total', 0)}건 성공"
             f" · 실패 {stats.get('watch_failed', 0)}건"
         )
-        if stats.get("summarized", 0) > 0:
-            lines[-1] += f" · 요약 {stats['summarized']}건"
-        if stats.get("download_failed", 0) > 0:
-            lines[-1] += f" · 다운실패 {stats['download_failed']}건"
+        for key, label in (("summarized", "요약"), ("download_failed", "다운실패")):
+            try:
+                count = int(stats.get(key, 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                count = 0
+            if count > 0:
+                lines[-1] += f" · {label} {count}건"
     lines.append(
         f"캘린더 후보 {stats.get('create', 0)}건 · 수동확인 {stats.get('manual_review', 0)}건 · 제외 {stats.get('skipped', 0)}건"
     )

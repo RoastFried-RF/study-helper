@@ -716,8 +716,23 @@ def build_candidates(
     skipped: list[dict] = []
 
     for item in items:
+        try:
+            if item.get("type") == "announcement":
+                res = analyze_announcement(item, now)
+            else:
+                res = analyze_pending(item, now)
+        except ValueError:
+            # 날짜 확정 실패는 해당 항목만 수동 확인으로 분리한다.
+            manual_review.append(
+                {
+                    "course": item.get("course"),
+                    "title": item.get("title"),
+                    "url": item.get("url"),
+                    "reason": "invalid_date",
+                }
+            )
+            continue
         if item.get("type") == "announcement":
-            res = analyze_announcement(item, now)
             if res["action"] == "manual_review":
                 manual_review.append(
                     {
@@ -730,7 +745,6 @@ def build_candidates(
                 continue
             events = res["events"]
         else:
-            res = analyze_pending(item, now)
             if res["action"] == "skip":
                 skipped.append({"summary": res.get("title"), "url": res.get("url"), "reason": res["reason"]})
                 continue

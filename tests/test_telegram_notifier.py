@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 import requests as _real_requests
 
 # 형식상 유효한 봇 토큰 (숫자:영문숫자_하이픈) — _validate_token 통과용.
@@ -286,3 +287,31 @@ def test_format_weekly_lms_digest_summary_and_download_failure():
     text = telegram_notifier.format_weekly_lms_digest(stats, [], [], None)
 
     assert text.splitlines()[1] == "강의 시청 5/5건 성공 · 실패 0건 · 요약 3건 · 다운실패 2건"
+
+
+@pytest.mark.parametrize("value", ["x", None, "", [], [1], {}, {"count": 1}, float("nan"), float("inf")])
+@pytest.mark.parametrize("key", ["summarized", "download_failed"])
+def test_format_weekly_lms_digest_invalid_stats(value, key):
+    """숫자로 바꿀 수 없는 통계는 0으로 취급하고 유효한 다른 건수는 유지한다."""
+    from src.notifier import telegram_notifier
+
+    stats = {"watch_total": 5, "watched": 5, "summarized": 3, "download_failed": 2, key: value}
+    text = telegram_notifier.format_weekly_lms_digest(stats, [], [], None)
+
+    suffix = " · 다운실패 2건" if key == "summarized" else " · 요약 3건"
+    assert text.splitlines()[1] == "강의 시청 5/5건 성공 · 실패 0건" + suffix
+    assert stats[key] is value
+
+
+@pytest.mark.parametrize(
+    ("summarized", "download_failed", "suffix"),
+    [("x", None, ""), ("3", "2", " · 요약 3건 · 다운실패 2건"), (3, 2, " · 요약 3건 · 다운실패 2건")],
+)
+def test_format_weekly_lms_digest_coerces_stats(summarized, download_failed, suffix):
+    """혼합된 비정상 값과 숫자 문자열·정수 입력을 안전하게 처리한다."""
+    from src.notifier import telegram_notifier
+
+    stats = {"watch_total": 5, "watched": 5, "summarized": summarized, "download_failed": download_failed}
+    text = telegram_notifier.format_weekly_lms_digest(stats, [], [], None)
+
+    assert text.splitlines()[1] == "강의 시청 5/5건 성공 · 실패 0건" + suffix
