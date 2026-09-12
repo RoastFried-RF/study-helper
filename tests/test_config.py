@@ -11,11 +11,10 @@ from src.config import Config, _default_download_dir, _read_version
 from src.util.atomic_write import atomic_write_text, file_lock
 
 
-def test_dotenv_overrides_ambient_config_preserves_runtime(monkeypatch, tmp_path):
+@pytest.mark.parametrize("conflicting_runtime", [False, True])
+def test_dotenv_overrides_ambient_config_preserves_runtime(monkeypatch, tmp_path, conflicting_runtime):
     """실제 설정 모듈 로딩 시 .env가 셸 설정을 이기고 런타임 주입 값은 유지된다."""
     env_path = tmp_path / ".env"
-    with file_lock(env_path):
-        atomic_write_text(env_path, "AI_AGENT=gemini\n")
     monkeypatch.setenv("AI_AGENT", "ambient")
     runtime = {
         "STUDY_HELPER_DATA_DIR": str(tmp_path),
@@ -23,6 +22,11 @@ def test_dotenv_overrides_ambient_config_preserves_runtime(monkeypatch, tmp_path
         "STUDY_HELPER_API_PORT": "19090",
         "STUDY_HELPER_API_ALLOW_NO_TOKEN": "0",
     }
+    content = "AI_AGENT=gemini\n"
+    if conflicting_runtime:
+        content += "".join(f"{key}=dotenv-value\n" for key in runtime)
+    with file_lock(env_path):
+        atomic_write_text(env_path, content)
     for key, value in runtime.items():
         monkeypatch.setenv(key, value)
     # 기존 Config 클래스 참조를 교체하지 않도록 독립 모듈로 실행한다.

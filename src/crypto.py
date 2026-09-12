@@ -96,7 +96,7 @@ def _load_or_create_key() -> bytes:
     우선순위:
     1. OS 키체인 (keyring)
     2. .secret_key 파일
-    3. 새 키 생성 후 키체인 → 파일 순으로 저장
+    3. 파일락 안에서 키를 확정하고 파일 및 키체인에 저장
     """
     # 1. keyring에서 시도
     key = _try_keyring_load()
@@ -107,37 +107,48 @@ def _load_or_create_key() -> bytes:
     key_file = _resolve_key_file()
     if key_file.exists() and key_file.is_file():
         key = key_file.read_bytes().strip()
-        # 파일에 있으면 키체인에도 동기화 시도
-        _try_keyring_save(key)
+        # 이미 영속된 키는 락 파일을 만들 수 없어도 기존대로 읽을 수 있다.
+        try:
+            from src.util.atomic_write import file_lock
+
+            with file_lock(key_file):
+                key = key_file.read_bytes().strip()
+                _try_keyring_save(key)
+        except (ImportError, OSError):
+            # atomic_write → logger → config → decrypt 초기화 중에는 락 함수가
+            # 아직 정의되지 않을 수 있다. 기존 키만 반환하고 공개는 생략한다.
+            pass
         return key
 
-    # 3. 새 키 생성
-    key = Fernet.generate_key()
-
-    # 키체인에 저장 시도
-    _try_keyring_save(key)
-
-    # 파일에도 저장 (Docker/CLI fallback)
+    # 3. 락 안에서 최종 키를 확정한 뒤에만 keyring 에 공개한다.
     # NEW-03: cross-process 키 race 방지. API 서버 + CLI 동시 첫 기동 시
     # 각자 새 키를 생성해 파일을 덮어쓰면 먼저 암호화한 .env 값을 영구
     # 복호화할 수 없다. file_lock 으로 직렬화하고, 락 안에서 "다시 읽기"
     # double-check 로 다른 프로세스가 먼저 만든 키를 채택한다.
     key_file = _resolve_key_file()
-    try:
-        from src.util.atomic_write import atomic_write_text, file_lock
+    from src.util.atomic_write import atomic_write_text, file_lock
 
-        key_file.parent.mkdir(parents=True, exist_ok=True)
-        with file_lock(key_file):
-            # double-check — 락 대기 중 다른 프로세스가 키를 만들었으면 그것을 채택
-            if key_file.exists() and key_file.is_file():
-                existing = key_file.read_bytes().strip()
-                if existing:
-                    _try_keyring_save(existing)
-                    return existing
+    with file_lock(key_file):
+        # double-check — 락 대기 중 다른 프로세스가 키를 만들었으면 그것을 채택
+        if key_file.exists() and key_file.is_file():
+            existing = key_file.read_bytes().strip()
+            if existing:
+                _try_keyring_save(existing)
+                return existing
+        # 파일 저장 실패 후 keyring 에만 영속된 키도 재확인한다.
+        key = _try_keyring_load()
+        if key:
+            return key
+        key = Fernet.generate_key()
+        file_error = None
+        try:
             atomic_write_text(key_file, key.decode(), mode=0o600)
-    except OSError:
-        pass  # Windows chmod 또는 읽기 전용 파일시스템
-    return key
+        except OSError as exc:
+            file_error = exc
+        keyring_saved = _try_keyring_save(key)
+        if file_error is not None and not keyring_saved:
+            raise OSError("암호화 키를 파일 또는 OS 키체인에 저장할 수 없습니다") from file_error
+        return key
 
 
 # L5: Fernet 객체 + key bytes 를 프로세스 캐시. 최초 1회만 keyring/파일 I/O 수행.

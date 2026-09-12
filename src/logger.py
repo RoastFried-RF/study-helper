@@ -31,13 +31,13 @@ from src.util.log_sanitize import mask_sensitive
 class SensitiveFilter(logging.Filter):
     """LOG-SYS-3: 모든 log record 메시지에 PII/OAuth 마스킹 적용.
 
-    `record.msg` 와 `record.args` 에 있는 문자열을 mask_sensitive 로 치환한다.
+    포맷 인자가 있으면 메시지 템플릿을 보존하고, 최종 마스킹은 Formatter 가 맡는다.
     player 등에서 명시적으로 이미 마스킹된 값에 대해서도 멱등(재적용 무해).
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            if isinstance(record.msg, str):
+            if isinstance(record.msg, str) and not record.args:
                 record.msg = mask_sensitive(record.msg)
             if record.args:
                 if isinstance(record.args, tuple):
@@ -51,6 +51,14 @@ class SensitiveFilter(logging.Filter):
 
 
 _SENSITIVE_FILTER = SensitiveFilter()
+
+
+class SanitizingFormatter(logging.Formatter):
+    """포맷 인자와 traceback 을 모두 문자열로 만든 뒤 공용 규칙으로 마스킹한다."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return mask_sensitive(super().format(record))
+
 
 # KST (UTC+9) — src.config.KST 와 동일 정의.
 # Docker 컨테이너에서 TZ 미설정 시에도 일관된 날짜로 로그 파일명을 생성하기 위해
@@ -100,7 +108,7 @@ def get_logger(name: str = "study_helper") -> logging.Logger:
         )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(
-            logging.Formatter(
+            SanitizingFormatter(
                 "%(asctime)s [%(levelname)-5s] %(name)s: %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
@@ -227,7 +235,7 @@ def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
         handler.setLevel(logging.DEBUG)
         # LOG-SYS-5: 전역 로거와 동일 포맷 — grep 시 필드 위치 일관성 유지.
         handler.setFormatter(
-            logging.Formatter(
+            SanitizingFormatter(
                 "%(asctime)s [%(levelname)-5s] %(name)s: %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )

@@ -506,7 +506,7 @@ class CourseScraper:
         att_el = await el.query_selector("[class*='attendance_status']")
         if att_el:
             att_classes = await att_el.get_attribute("class") or ""
-            for status in ("attendance", "late", "absent", "excused"):
+            for status in ("absent", "late", "excused", "attendance"):
                 if status in att_classes:
                     attendance = status
                     break

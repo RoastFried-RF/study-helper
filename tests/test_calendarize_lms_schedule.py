@@ -8,9 +8,12 @@ now 기준 시각은 2026-06-04 09:00 KST(과제 요청의 "현재 후보" 맥�
 """
 
 import io
+import json
+import subprocess
 import sys
 from datetime import datetime
 
+import pytest
 from scripts.calendarize_lms_schedule import (
     SOURCE_MARKER_PREFIX,
     _load_items,
@@ -374,6 +377,50 @@ def test_event_description_contains_url_and_marker():
 
 
 # ── build_candidates: 통합 + 중복 제거 ──────────────────────────────
+
+
+@pytest.mark.parametrize("invalid_date", ["2026년 2월 29일", "9월 31일", "2월 30일", "2026-09-31"])
+@pytest.mark.parametrize("time", ["", " 오전 10시"])
+def test_build_candidates_isolates_invalid_dates(invalid_date, time):
+    """연도 추정·이벤트 생성 중 날짜 오류가 나도 다음 정상 항목을 처리한다."""
+    invalid = _announcement("과목", "잘못된 일정", f"{invalid_date}{time} 시험", "https://x/invalid")
+    valid = _announcement("과목", "정상 일정", "2026-09-30 시험", "https://x/valid")
+
+    out = build_candidates([invalid, valid], NOW)
+
+    assert out["manual_review"] == [
+        {"course": "과목", "title": "잘못된 일정", "url": "https://x/invalid", "reason": "invalid_date"}
+    ]
+    assert out["stats"] == {"create": 1, "manual_review": 1, "skipped": 0}
+    assert _first_date(out["create"][0]) == "2026-09-30"
+    assert out["create"][0]["url"] == valid["url"]
+
+
+def test_calendarize_cli_invalid_dates_returns_json():
+    """CLI도 잘못된 공지를 격리하고 정상 JSON과 성공 종료 코드를 반환한다."""
+    items = [
+        _announcement("과목", "잘못된 일정", f"{date} 시험", f"https://x/invalid/{i}")
+        for i, date in enumerate(["2026년 2월 29일", "9월 31일", "2월 30일"])
+    ]
+    items.append(_announcement("과목", "정상 일정", "2099-09-30 시험", "https://x/valid"))
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "scripts.calendarize_lms_schedule"],
+        input=json.dumps({"items": items}),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    assert out["ok"] is True
+    assert out["applied"] is False
+    assert out["stats"] == {"create": 1, "manual_review": 3, "skipped": 0}
+    assert all(item["reason"] == "invalid_date" for item in out["manual_review"])
+    assert _first_date(out["create"][0]) == "2099-09-30"
+    assert "Traceback" not in proc.stderr
 
 
 def test_build_candidates_dedup_own_marker():

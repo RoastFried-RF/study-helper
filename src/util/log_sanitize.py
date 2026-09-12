@@ -40,6 +40,12 @@ _SENSITIVE_KEYS = (
 # Plain `key=value` (form body, 쿼리스트링 중 URL-decoded 섹션)
 _SENSITIVE_KV_RE = re.compile(rf"(?i)({_SENSITIVE_KEYS})=([^&\s\"'<>]+)")
 
+# dict/JSON 인자가 최종 문자열로 변환된 경우에도 같은 민감 키 목록을 적용한다.
+_SENSITIVE_MAPPING_RE = re.compile(rf"(?i)([\"'](?:{_SENSITIVE_KEYS})[\"']\s*:\s*)([\"'])(.*?)\2")
+
+# Telegram API 는 봇 토큰을 쿼리가 아닌 URL 경로에 포함한다.
+_TELEGRAM_BOT_PATH_RE = re.compile(r"(/bot)\d+:[A-Za-z0-9_-]+(?=/|[?\s\"'<>]|$)")
+
 # URL-encoded `key%3Dvalue` — `%3D` 는 `=` 의 URL-인코딩. LTI URL 이
 # body 안에 삽입되면 이중 인코딩되어 plain `=` 이 없기 때문에 별도 규칙 필요.
 # NF-04: 값 클래스가 `%` 를 통째로 제외하면 `%XX` 인코딩 시퀀스(예: `%40`=`@`)
@@ -63,6 +69,8 @@ def mask_sensitive(text: str) -> str:
         return text
     text = _SENSITIVE_KV_RE.sub(lambda m: f"{m.group(1)}={MASK}", text)
     text = _SENSITIVE_KV_URLENC_RE.sub(lambda m: f"{m.group(1)}%3D{MASK}", text)
+    text = _SENSITIVE_MAPPING_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}{m.group(2)}", text)
+    text = _TELEGRAM_BOT_PATH_RE.sub(lambda m: f"{m.group(1)}{MASK}", text)
     text = _SENSITIVE_HTML_RE.sub(
         lambda m: (m.group(1) or m.group(3) or "") + MASK + (m.group(2) or m.group(4) or ""),
         text,
@@ -78,4 +86,6 @@ def count_sensitive(text: str) -> int:
         len(_SENSITIVE_KV_RE.findall(text))
         + len(_SENSITIVE_KV_URLENC_RE.findall(text))
         + len(_SENSITIVE_HTML_RE.findall(text))
+        + len(_SENSITIVE_MAPPING_RE.findall(text))
+        + len(_TELEGRAM_BOT_PATH_RE.findall(text))
     )
